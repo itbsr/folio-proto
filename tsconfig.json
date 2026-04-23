@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "lib": ["ESNext", "DOM"],
+    "baseUrl": ".",
+    "paths": {
+      "@my-app/shared": ["./packages/shared/src/index.ts"],
+      "@my-app/shared/*": ["./packages/shared/src/*"],
+      "@my-app/backend": ["./packages/backend/src/index.ts"],
+      "@my-app/backend/*": ["./packages/backend/src/*"]
+    }
+  },
+  "exclude": ["node_modules"]
+}
