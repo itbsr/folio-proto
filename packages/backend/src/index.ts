@@ -4,7 +4,7 @@ import { zValidator } from '@hono/zod-validator';
 import { setCookie, deleteCookie, getCookie } from 'hono/cookie';
 import { registerSchema, loginSchema, processImageSchema } from '@my-app/shared';
 import { hashPassword, verifyPassword } from './lib/crypto';
-import { callDewarpNet } from './services/ai';
+import { callDewarpNet, streamDewarpNet } from './services/ai';
 import { PLAN_LIMITS } from './middleware/quota';
 import type { Context } from 'hono';
 import type { Bindings } from './types';
@@ -109,6 +109,85 @@ const routes = app
     ).bind(user.id, quota.month).first<{ count: number }>();
 
     return c.json({ result_image: resultImage, usage: { used: row?.count ?? 1, limit: quota.limit, month: quota.month } });
+  })
+
+  .post('/images/process-stream', zValidator('json', processImageSchema), async (c) => {
+    const user = await getSessionUser(c);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+    const quota = await checkQuota(c.env.DB, user.id, user.plan);
+    if (!quota.ok) return c.json({ error: 'quota_exceeded', used: quota.used, limit: quota.limit }, 429);
+
+    const { image } = c.req.valid('json');
+
+    let aiResponse: Response;
+    try {
+      aiResponse = await streamDewarpNet(c.env.AI_ENDPOINT, c.env.AI_API_KEY, image);
+    } catch (e) {
+      await c.env.DB.prepare('INSERT INTO usage_logs (user_id, status, error_msg) VALUES (?, ?, ?)')
+        .bind(user.id, 'error', e instanceof Error ? e.message : 'unknown').run();
+      return c.json({ error: 'Processing failed' }, 502);
+    }
+
+    const enc = new TextEncoder();
+    const dec = new TextDecoder();
+    const db = c.env.DB;
+    const userId = user.id;
+    const month = quota.month;
+    const planLimit = quota.limit;
+
+    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+    const writer = writable.getWriter();
+
+    (async () => {
+      const reader = aiResponse.body!.getReader();
+      let buffer = '';
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += dec.decode(value, { stream: true });
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop() ?? '';
+          for (const part of parts) {
+            if (!part.startsWith('data: ')) {
+              await writer.write(enc.encode(part + '\n\n'));
+              continue;
+            }
+            let event: Record<string, unknown>;
+            try { event = JSON.parse(part.slice(6).trim()); } catch { continue; }
+
+            if (event.stage === 'done') {
+              await Promise.all([
+                db.prepare('INSERT INTO usage_logs (user_id, status) VALUES (?, ?)').bind(userId, 'success').run(),
+                db.prepare(
+                  `INSERT INTO usage_quotas (user_id, month, count) VALUES (?, ?, 1)
+                   ON CONFLICT (user_id, month) DO UPDATE SET count = count + 1`
+                ).bind(userId, month).run(),
+              ]);
+              const row = await db.prepare(
+                'SELECT count FROM usage_quotas WHERE user_id = ? AND month = ?'
+              ).bind(userId, month).first<{ count: number }>();
+              event.usage = { used: row?.count ?? 1, limit: planLimit, month };
+            } else if (event.error) {
+              await db.prepare('INSERT INTO usage_logs (user_id, status, error_msg) VALUES (?, ?, ?)')
+                .bind(userId, 'error', String(event.error)).run();
+            }
+
+            await writer.write(enc.encode(`data: ${JSON.stringify(event)}\n\n`));
+          }
+        }
+      } finally {
+        reader.releaseLock();
+        await writer.close().catch(() => {});
+      }
+    })();
+
+    return new Response(readable, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+      },
+    });
   })
 
   .get('/images/history', async (c) => {
