@@ -646,56 +646,136 @@ function ScreenProcessing({ lang, go, inputImage, onResult }: {
   const [pct, setPct] = useState(0);
   const [phase, setPhase] = useState(0);
   const [error, setError] = useState('');
-  const hasRun = useRef(false);
+  const [sendPct, setSendPct] = useState(0);
+  const [inferPct, setInferPct] = useState(0);
+  const [receivePct, setReceivePct] = useState(0);
+  const startTime = useRef(Date.now());
 
-  const phases = jp
-    ? ['エッジの検出', '射影変換の計算', '明るさとコントラストの正規化', 'テキスト領域の最終化']
-    : ['Edge detection', 'Projective transform', 'Lighting & contrast', 'Finalize text regions'];
+  const phaseLogs = ['DECODE / PREPROCESS', 'WC MODEL INFERENCE', 'BM MODEL INFERENCE', 'UNWARP / ENCODE'];
 
-  const phaseLogs = ['EDGE DETECT', 'PROJECTIVE SOLVE', 'TONAL NORMALIZE', 'TEXT FINALIZE'];
+  const stagePhase: Record<string, number> = {
+    decode: 0, wc_preprocess: 0,
+    wc_inference: 1,
+    bm_inference: 2,
+    unwarp: 3, encode: 3, done: 3,
+  };
 
   useEffect(() => {
-    if (hasRun.current || !inputImage) return;
-    hasRun.current = true;
+    if (!inputImage) return;
 
-    // Animate progress
-    const id = setInterval(() => {
-      setPct((p) => {
-        const next = Math.min(92, p + 1.8);
-        return next;
-      });
-    }, 60);
+    const controller = new AbortController();
 
-    client.api.images.process.$post({ json: { image: inputImage } })
-      .then((res) => res.json() as Promise<unknown>)
-      .then((data) => {
-        clearInterval(id);
-        const d = data as { result_image?: string; usage?: UsageInfo; error?: string };
-        if (d.error) throw new Error(d.error);
-        setPct(100);
-        onResult(d.result_image!, d.usage!);
-        setTimeout(() => go('compare'), 600);
-      })
-      .catch((err) => {
-        clearInterval(id);
-        setPct(100);
-        setError(err instanceof Error ? err.message : jp ? '処理に失敗しました' : 'Processing failed');
-      });
+    (async () => {
+      let res: Response;
+      try {
+        res = await fetch('/api/images/process-stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ image: inputImage }),
+          signal: controller.signal,
+        });
+      } catch (e) {
+        if ((e as Error)?.name === 'AbortError') return;
+        setError(e instanceof Error ? e.message : jp ? 'ネットワークエラー' : 'Network error');
+        return;
+      }
 
-    return () => clearInterval(id);
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({})) as Record<string, unknown>;
+        setError(
+          res.status === 429
+            ? (jp ? '処理上限に達しました' : 'Quota exceeded')
+            : (d.error as string) ?? (jp ? '処理に失敗しました' : 'Processing failed'),
+        );
+        return;
+      }
+
+      const reader = res.body!.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      let firstEvent = true;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split('\n\n');
+        buf = parts.pop() ?? '';
+        for (const part of parts) {
+          if (!part.startsWith('data: ')) continue;
+          let ev: Record<string, unknown>;
+          try { ev = JSON.parse(part.slice(6).trim()); } catch { continue; }
+          if (ev.error) { setError(ev.error as string); return; }
+
+          if (firstEvent) { setSendPct(100); firstEvent = false; }
+
+          if (ev.progress != null) {
+            const overall = ev.progress as number;
+            setPct(overall);
+            if (ev.stage !== 'done') {
+              setInferPct(Math.round(Math.min(100, Math.max(0, ((overall - 5) / 90) * 100))));
+            }
+          }
+          if (ev.stage != null && stagePhase[ev.stage as string] != null) {
+            setPhase(stagePhase[ev.stage as string]);
+          }
+          if (ev.stage === 'done') {
+            setInferPct(100);
+            setReceivePct(100);
+            onResult(ev.result as string, ev.usage as UsageInfo);
+            setTimeout(() => go('compare'), 700);
+            return;
+          }
+        }
+      }
+    })().catch((e) => {
+      if (e?.name !== 'AbortError') {
+        setError(e instanceof Error ? e.message : jp ? '処理に失敗しました' : 'Processing failed');
+      }
+    });
+
+    return () => controller.abort();
   }, []);
 
-  useEffect(() => {
-    if (pct > 22 && phase < 1) setPhase(1);
-    if (pct > 52 && phase < 2) setPhase(2);
-    if (pct > 78 && phase < 3) setPhase(3);
-  }, [pct]);
+  const elapsed = (Date.now() - startTime.current) / 1000;
+  const sec = elapsed.toFixed(1);
+  const estimated = pct > 0 ? (elapsed / pct) * 100 : 0;
+  const left = Math.max(0, estimated - elapsed).toFixed(1);
 
-  const sec = ((pct / 100) * 3.4).toFixed(1);
-  const left = Math.max(0, 3.4 - parseFloat(sec)).toFixed(1);
+  const pipeline = [
+    {
+      id: 'send',
+      en: 'TRANSMIT', jp: '送信',
+      pct: sendPct,
+      statusEn: sendPct === 0 ? 'Uploading image data…' : 'Image received by server',
+      statusJp: sendPct === 0 ? '画像データを送信中…' : 'サーバーが受付完了',
+    },
+    {
+      id: 'infer',
+      en: 'INFERENCE', jp: '推論',
+      pct: inferPct,
+      statusEn: inferPct === 0 ? 'Awaiting pipeline…' : inferPct < 100 ? phaseLogs[Math.min(phase, 3)] : 'Model inference complete',
+      statusJp: inferPct === 0 ? 'パイプライン待機中…' : inferPct < 100 ? '推論実行中…' : 'モデル推論完了',
+    },
+    {
+      id: 'recv',
+      en: 'RECEIVE', jp: '受信',
+      pct: receivePct,
+      statusEn: receivePct === 0 ? 'Awaiting result transfer…' : 'Result delivered',
+      statusJp: receivePct === 0 ? '結果の受信待機中…' : '受信完了',
+    },
+  ];
 
   return (
     <div className="screen" data-screen-label="04 Processing">
+      <style>{`
+        @keyframes sweep { 0%{ transform: translateY(-100%);} 100%{ transform: translateY(100%);} }
+        @keyframes pipelinePulse { 0%,100%{opacity:0.04} 50%{opacity:0.1} }
+        @keyframes dotBlink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+        @keyframes barShimmer { 0%{background-position:200% center} 100%{background-position:-200% center} }
+      `}</style>
+
       <div className="row between" style={{ marginBottom: 16 }}>
         <div className="stack-sm">
           <div className="kicker"><span className="star">§04</span> {jp ? '自動補正中 ／ AUTO-CORRECT' : 'AUTO-CORRECT'}</div>
@@ -723,14 +803,10 @@ function ScreenProcessing({ lang, go, inputImage, onResult }: {
               <SkewedDocMock intensity={pct >= 100 ? 'soft' : 'default'} />
             </div>
           )}
-          {/* Scan sweep */}
           {pct < 100 && (
             <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', background: 'linear-gradient(180deg, transparent 0%, transparent 38%, rgba(200,54,43,.28) 50%, transparent 62%, transparent 100%)', animation: 'sweep 1.6s linear infinite' }} />
           )}
-          <style>{`@keyframes sweep { 0%{ transform: translateY(-100%);} 100%{ transform: translateY(100%);} }`}</style>
-          {/* Analysis grid */}
           <div style={{ position: 'absolute', inset: 28, pointerEvents: 'none', backgroundImage: `linear-gradient(rgba(200,54,43,.18) 1px, transparent 1px), linear-gradient(90deg, rgba(200,54,43,.18) 1px, transparent 1px)`, backgroundSize: '12.5% 12.5%', opacity: phase >= 1 ? 0 : 0.7, transition: 'opacity .4s' }} />
-          {/* HUD */}
           <div style={{ position: 'absolute', top: 14, left: 14, right: 14, display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: '0.1em', color: 'rgba(255,255,255,.85)' }}>
             <span>● {phaseLogs[Math.min(phase, 3)]}</span>
             <span>{pct.toFixed(0)}%</span>
@@ -743,39 +819,106 @@ function ScreenProcessing({ lang, go, inputImage, onResult }: {
           </div>
         </div>
 
-        {/* Status panel */}
-        <aside className="col" style={{ gap: 16 }}>
-          <div className="card" style={{ position: 'relative', overflow: 'hidden' }}>
-            <div className="label">{jp ? '進捗' : 'PROGRESS'}</div>
-            <div className="serif" style={{ fontSize: 96, lineHeight: 1, fontFeatureSettings: "'tnum'" }}>
-              {String(Math.floor(pct)).padStart(2, '0')}<span style={{ fontSize: 28, color: 'var(--accent)' }}>%</span>
+        {/* Pipeline panel */}
+        <aside className="col" style={{ gap: 0 }}>
+          <div style={{ border: '1px solid var(--rule-strong)', overflow: 'hidden' }}>
+            {/* Panel header */}
+            <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--rule-strong)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, letterSpacing: '0.16em', color: 'var(--mute)' }}>PIPELINE STATUS</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, letterSpacing: '0.1em', color: 'var(--mute)' }}>
+                {pct >= 100 ? '✓ COMPLETE' : '● RUNNING'}
+              </span>
             </div>
-            <div className="bar" style={{ marginTop: 8 }}>
-              <i style={{ width: `${pct}%`, transition: 'width .1s' }} />
-            </div>
-          </div>
-          <div className="card">
-            <div className="label" style={{ marginBottom: 12 }}>STEPS / ステップ</div>
-            <div className="col" style={{ gap: 10 }}>
-              {phases.map((label, i) => {
-                const done = i < phase;
-                const active = i === phase && pct < 100;
-                return (
-                  <div key={i} className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
-                    <div style={{ width: 22, height: 22, flexShrink: 0, border: `1px solid ${done ? 'var(--accent)' : 'var(--rule-strong)'}`, background: done ? 'var(--accent)' : 'transparent', color: done ? 'var(--accent-ink)' : 'var(--ink)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 10 }}>
-                      {done ? '✓' : (i + 1)}
+
+            {/* Three stage rows */}
+            {pipeline.map(({ id, en, jp: labelJp, pct: stagePct, statusEn, statusJp }, idx) => {
+              const complete = stagePct >= 100;
+              const active = stagePct > 0 && stagePct < 100;
+              const pending = stagePct === 0;
+              const accentRgb = 'var(--accent)';
+
+              return (
+                <div
+                  key={id}
+                  style={{
+                    position: 'relative',
+                    padding: '18px 16px 16px',
+                    borderBottom: idx < pipeline.length - 1 ? '1px solid var(--rule)' : 'none',
+                    transition: 'background 0.4s',
+                    background: active ? 'rgba(0,0,0,0.02)' : 'transparent',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {/* Active glow overlay */}
+                  {active && (
+                    <div style={{ position: 'absolute', inset: 0, background: accentRgb, pointerEvents: 'none', animation: 'pipelinePulse 2.4s ease-in-out infinite' }} />
+                  )}
+
+                  {/* Stage label row */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+                    <div>
+                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 8, letterSpacing: '0.18em', color: pending ? 'var(--mute)' : complete ? accentRgb : 'var(--ink)', marginBottom: 2, transition: 'color 0.3s' }}>
+                        {jp ? labelJp : en}
+                      </div>
+                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 8, letterSpacing: '0.1em', color: active ? accentRgb : 'var(--mute)', transition: 'color 0.3s' }}>
+                        {active && <span style={{ animation: 'dotBlink 1.2s ease-in-out infinite', display: 'inline-block' }}>◆ </span>}
+                        {complete && '▸ '}
+                        {pending && '○ '}
+                        {jp ? statusJp : statusEn}
+                      </div>
                     </div>
-                    <div style={{ paddingTop: 1 }}>
-                      <div style={{ color: (!done && !active) ? 'var(--mute)' : 'var(--ink)', fontSize: 14 }}>{label}</div>
-                      {active && <div className="mono" style={{ fontSize: 10, color: 'var(--accent)', marginTop: 4 }}>◆ {phaseLogs[i]} · RUNNING</div>}
+
+                    {/* Large percentage */}
+                    <div style={{
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: complete ? 18 : 38,
+                      lineHeight: 1,
+                      fontFeatureSettings: "'tnum'",
+                      color: complete ? accentRgb : pending ? 'var(--rule-strong)' : 'var(--ink)',
+                      letterSpacing: complete ? '0.05em' : '-0.02em',
+                      transition: 'all 0.3s',
+                      minWidth: 68,
+                      textAlign: 'right',
+                      alignSelf: 'center',
+                    }}>
+                      {complete
+                        ? (jp ? '完了' : 'DONE')
+                        : `${String(stagePct).padStart(2, '0')}%`}
                     </div>
                   </div>
-                );
-              })}
-            </div>
+
+                  {/* Progress bar track */}
+                  <div style={{ position: 'relative', height: 2, background: 'var(--rule)' }}>
+                    <div style={{
+                      position: 'absolute', left: 0, top: 0, height: '100%',
+                      width: `${stagePct}%`,
+                      background: active
+                        ? `linear-gradient(90deg, ${accentRgb}, color-mix(in srgb, var(--accent) 70%, transparent), ${accentRgb})`
+                        : accentRgb,
+                      backgroundSize: active ? '200% 100%' : '100% 100%',
+                      animation: active ? 'barShimmer 1.8s linear infinite' : 'none',
+                      transition: 'width 0.15s ease-out',
+                    }} />
+                    {/* Tick marks at 25/50/75 */}
+                    {[25, 50, 75].map(t => (
+                      <div key={t} style={{ position: 'absolute', left: `${t}%`, top: -2, width: 1, height: 6, background: 'var(--rule)', opacity: 0.6 }} />
+                    ))}
+                  </div>
+
+                  {/* Scale labels */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+                    {['0', '25', '50', '75', '100'].map(v => (
+                      <span key={v} style={{ fontFamily: 'var(--font-mono)', fontSize: 7, color: 'var(--mute)', opacity: 0.6, letterSpacing: '0.05em' }}>{v}</span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
           </div>
+
+          {/* Error card */}
           {error && (
-            <div className="card" style={{ borderColor: 'var(--accent)' }}>
+            <div className="card" style={{ borderColor: 'var(--accent)', marginTop: 12 }}>
               <div className="label" style={{ color: 'var(--accent)', marginBottom: 6 }}>ERROR</div>
               <p style={{ margin: 0, fontSize: 13, color: 'var(--mute)' }}>{error}</p>
               <button className="btn ghost" style={{ marginTop: 12, width: '100%', justifyContent: 'center' }} onClick={() => go('upload')}>
