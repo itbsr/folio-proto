@@ -10,7 +10,7 @@ compatibility_date = "2024-04-03"
 [[d1_databases]]
 binding = "DB"
 database_name = "grad-proto-db"
-database_id = "REPLACE_WITH_grad-proto-db_ID"
+database_id = "372e0b01-8b4a-4a97-a647-e8d0c0f28978"
 migrations_dir = "migrations"
 
 # ── Staging (main / PR previews) ─────────────────────────────────────────
@@ -23,7 +23,7 @@ name = "my-app-backend-staging"
 [[env.staging.d1_databases]]
 binding = "DB"
 database_name = "grad-proto-db-staging"
-database_id = "REPLACE_WITH_grad-proto-db-staging_ID"
+database_id = "ecfe3f84-a920-496d-a5f4-41d64a646dd7"
 migrations_dir = "migrations"
 
 # Secrets — set PER ENVIRONMENT via `wrangler secret put <NAME> [-e staging]`:
