@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import client from '../lib/hc';
+import client, { API_BASE } from '../lib/hc';
 import type { UsageInfo, HistoryItem } from '@my-app/shared';
 
 // ─────────────────────────────────────────────
@@ -668,7 +668,7 @@ function ScreenProcessing({ lang, go, inputImage, onResult }: {
     (async () => {
       let res: Response;
       try {
-        res = await fetch('/api/images/process-stream', {
+        res = await fetch(`${API_BASE}/api/images/process-stream`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',

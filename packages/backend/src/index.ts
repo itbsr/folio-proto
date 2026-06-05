@@ -58,10 +58,15 @@ const routes = app
       .toISOString().replace('T', ' ').slice(0, 19);
     await c.env.DB.prepare('INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)')
       .bind(sessionId, user.id, expiresAt).run();
+    // Cross-site cookie (frontend and API on separate origins): the session
+    // cookie must be SameSite=None; Secure to be sent on cross-site requests.
+    // In local dev (http, same-origin via Vite proxy) fall back to Lax, since
+    // SameSite=None requires Secure and browsers drop Secure cookies over http.
+    const isHttps = c.req.url.startsWith('https://');
     setCookie(c, 'session', sessionId, {
-      httpOnly: true, sameSite: 'Lax', path: '/',
+      httpOnly: true, sameSite: isHttps ? 'None' : 'Lax', path: '/',
       maxAge: 60 * 60 * 24 * 7,
-      secure: c.req.url.startsWith('https://'),
+      secure: isHttps,
     });
     return c.json({ user: { id: user.id, email: user.email, plan: user.plan } });
   })
