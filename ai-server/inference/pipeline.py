@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Callable
 
 # DewarpNet repo lives two directories above this file (../../DewarpNet).
 # Works both in local dev (ai-server/inference/) and Docker (/app/ai-server/inference/).
@@ -95,6 +96,62 @@ class DewarpPipeline:
 
         result = self._unwarp(imgorg, bm_out)
 
+        result_bgr = cv2.cvtColor((result * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
+        _, buf = cv2.imencode(".png", result_bgr)
+        return buf.tobytes()
+
+    def _run_with_hooks(
+        self,
+        model: nn.Module,
+        input_tensor: torch.Tensor,
+        start_pct: int,
+        end_pct: int,
+        on_progress: Callable[[int, str], None],
+    ) -> torch.Tensor:
+        """leafレイヤーにforward hookを付けて進捗をコールバックする。整数%が変化した時のみ送信。"""
+        leaf_modules = [m for m in model.modules() if not list(m.children())]
+        total = len(leaf_modules)
+        counter = [0]
+        last_pct = [start_pct]
+
+        def hook(module, input, output):
+            counter[0] += 1
+            new_pct = start_pct + int((counter[0] / total) * (end_pct - start_pct))
+            if new_pct > last_pct[0]:
+                last_pct[0] = new_pct
+                on_progress(new_pct, "layer")
+
+        handles = [m.register_forward_hook(hook) for m in leaf_modules]
+        try:
+            return model(input_tensor)
+        finally:
+            for h in handles:
+                h.remove()
+
+    @torch.no_grad()
+    def process_with_progress(
+        self,
+        image_bytes: bytes,
+        on_progress: Callable[[int, str], None],
+    ) -> bytes:
+        on_progress(5, "decode")
+        imgorg = self._decode(image_bytes)
+
+        on_progress(15, "wc_preprocess")
+        img_tensor = self._to_tensor(imgorg, self.WC_SIZE)
+
+        on_progress(20, "wc_inference")
+        wc_out = self._run_with_hooks(self.wc_model, img_tensor, 20, 55, on_progress)
+        pred_wc = self.htan(wc_out)
+        bm_input = F.interpolate(pred_wc, self.BM_SIZE)
+
+        on_progress(55, "bm_inference")
+        bm_out = self._run_with_hooks(self.bm_model, bm_input, 55, 85, on_progress)
+
+        on_progress(85, "unwarp")
+        result = self._unwarp(imgorg, bm_out)
+
+        on_progress(95, "encode")
         result_bgr = cv2.cvtColor((result * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
         _, buf = cv2.imencode(".png", result_bgr)
         return buf.tobytes()
