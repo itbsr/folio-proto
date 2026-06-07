@@ -646,9 +646,11 @@ function ScreenProcessing({ lang, go, inputImage, onResult }: {
   const [pct, setPct] = useState(0);
   const [phase, setPhase] = useState(0);
   const [error, setError] = useState('');
-  const [sendPct, setSendPct] = useState(0);
-  const [inferPct, setInferPct] = useState(0);
-  const [receivePct, setReceivePct] = useState(0);
+  const [edgePct, setEdgePct] = useState(0);             // ① 上り送信   (XHR upload.onprogress)
+  const [aiArrivalPct, setAiArrivalPct] = useState(0);   // ② 上り受信   (SSE received)
+  const [inferPct, setInferPct] = useState(0);           // ③ 推論       (SSE infer)
+  const [resultSentPct, setResultSentPct] = useState(0); // ③' 下り送信  (SSE result_sent)
+  const [downloadPct, setDownloadPct] = useState(0);     // ④ 下り受信   (XHR onprogress)
   const startTime = useRef(Date.now());
 
   const phaseLogs = ['DECODE / PREPROCESS', 'WC MODEL INFERENCE', 'BM MODEL INFERENCE', 'UNWARP / ENCODE'];
@@ -663,79 +665,104 @@ function ScreenProcessing({ lang, go, inputImage, onResult }: {
   useEffect(() => {
     if (!inputImage) return;
 
-    const controller = new AbortController();
+    const jobId = crypto.randomUUID();
+    let settled = false;
+    const finish = () => { settled = true; };
 
-    (async () => {
-      let res: Response;
-      try {
-        res = await fetch(`${API_BASE}/api/images/process-stream`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ image: inputImage }),
-          signal: controller.signal,
-        });
-      } catch (e) {
-        if ((e as Error)?.name === 'AbortError') return;
-        setError(e instanceof Error ? e.message : jp ? 'ネットワークエラー' : 'Network error');
-        return;
-      }
+    // ── #1 SSE：サーバ側ステータスのみ（② 上り受信 / ③ 推論 / ③' 下り送信）──
+    //     結果本体・usage・完了判定は #2 XHR 側。SSE が切れても結果は届く。
+    const es = new EventSource(
+      `${API_BASE}/api/images/progress?jobId=${jobId}`,
+      { withCredentials: true },
+    );
 
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({})) as Record<string, unknown>;
-        setError(
-          res.status === 429
-            ? (jp ? '処理上限に達しました' : 'Quota exceeded')
-            : (d.error as string) ?? (jp ? '処理に失敗しました' : 'Processing failed'),
-        );
-        return;
-      }
-
-      const reader = res.body!.getReader();
-      const dec = new TextDecoder();
-      let buf = '';
-      let firstEvent = true;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const parts = buf.split('\n\n');
-        buf = parts.pop() ?? '';
-        for (const part of parts) {
-          if (!part.startsWith('data: ')) continue;
-          let ev: Record<string, unknown>;
-          try { ev = JSON.parse(part.slice(6).trim()); } catch { continue; }
-          if (ev.error) { setError(ev.error as string); return; }
-
-          if (firstEvent) { setSendPct(100); firstEvent = false; }
-
-          if (ev.progress != null) {
-            const overall = ev.progress as number;
-            setPct(overall);
-            if (ev.stage !== 'done') {
-              setInferPct(Math.round(Math.min(100, Math.max(0, ((overall - 5) / 90) * 100))));
-            }
-          }
-          if (ev.stage != null && stagePhase[ev.stage as string] != null) {
-            setPhase(stagePhase[ev.stage as string]);
-          }
-          if (ev.stage === 'done') {
-            setInferPct(100);
-            setReceivePct(100);
-            onResult(ev.result as string, ev.usage as UsageInfo);
-            setTimeout(() => go('compare'), 700);
-            return;
-          }
+    es.onmessage = (e) => {
+      let ev: Record<string, unknown>;
+      try { ev = JSON.parse(e.data); } catch { return; }
+      switch (ev.type) {
+        case 'received':                          // ② 推論サーバ受信（上り）
+          setAiArrivalPct(Math.round(ev.pct as number));
+          break;
+        case 'infer': {                           // ③ 推論
+          const overall = ev.pct as number;
+          setPct(overall);
+          setInferPct(Math.round(Math.min(100, Math.max(0, overall))));
+          const step = ev.step as string | undefined;
+          if (step && stagePhase[step] != null) setPhase(stagePhase[step]);
+          break;
         }
+        case 'result_sent':                       // ③' 推論サーバ送出（下り）
+          setAiArrivalPct(100);
+          setInferPct(100);
+          setResultSentPct(Math.round(ev.pct as number));
+          break;
+        case 'done':
+          setResultSentPct(100);
+          es.close();
+          break;
+        case 'error':
+          if (!settled) { setError((ev.message as string) ?? (jp ? '処理に失敗しました' : 'Processing failed')); finish(); }
+          es.close();
+          break;
       }
-    })().catch((e) => {
-      if (e?.name !== 'AbortError') {
-        setError(e instanceof Error ? e.message : jp ? '処理に失敗しました' : 'Processing failed');
-      }
-    });
+    };
+    es.onerror = () => es.close(); // 結果は XHR 側で受領するため切断は致命でない
 
-    return () => controller.abort();
+    // ── #2 XHR：① 上り送信（画像アップロード）+ ④ 下り受信（結果ダウンロード）──
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE}/api/images/upload?jobId=${jobId}`);
+    xhr.withCredentials = true;
+    xhr.responseType = 'text';
+    xhr.setRequestHeader('Content-Type', 'application/json');
+
+    xhr.upload.onprogress = (e) => {               // ① 送信（上り）
+      if (e.lengthComputable) setEdgePct(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.upload.onload = () => setEdgePct(100);
+
+    xhr.onprogress = (e) => {                       // ④ 受信（下り＝結果ダウンロード）
+      // Content-Length が落ちても動くよう、無ければ X-Result-Bytes を総量に使う。
+      const headerTotal = Number(xhr.getResponseHeader('X-Result-Bytes')) || 0;
+      const total = e.lengthComputable && e.total ? e.total : headerTotal;
+      if (total > 0) setDownloadPct(Math.min(100, Math.round((e.loaded / total) * 100)));
+    };
+
+    xhr.onload = () => {
+      if (settled) return;
+      if (xhr.status >= 200 && xhr.status < 300) {
+        setDownloadPct(100);
+        setPct(100);
+        let usage: UsageInfo | undefined;
+        try { usage = JSON.parse(xhr.getResponseHeader('X-Usage') ?? 'null') ?? undefined; } catch { /* best-effort */ }
+        finish();
+        es.close();
+        onResult(xhr.responseText, usage as UsageInfo);
+        setTimeout(() => go('compare'), 700);
+      } else {
+        let msg = xhr.status === 429
+          ? (jp ? '処理上限に達しました' : 'Quota exceeded')
+          : (jp ? '処理に失敗しました' : 'Processing failed');
+        if (xhr.status !== 429) { try { msg = (JSON.parse(xhr.responseText).error as string) ?? msg; } catch { /* keep */ } }
+        setError(msg);
+        finish();
+        es.close();
+      }
+    };
+    xhr.onerror = () => {
+      if (settled) return;
+      setError(jp ? 'ネットワークエラー' : 'Network error');
+      finish();
+      es.close();
+    };
+
+    xhr.send(JSON.stringify({ image: inputImage }));
+
+    return () => {
+      settled = true;
+      es.close();
+      xhr.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const elapsed = (Date.now() - startTime.current) / 1000;
@@ -743,27 +770,31 @@ function ScreenProcessing({ lang, go, inputImage, onResult }: {
   const estimated = pct > 0 ? (elapsed / pct) * 100 : 0;
   const left = Math.max(0, estimated - elapsed).toFixed(1);
 
-  const pipeline = [
+  // 各エリア（アップロード / 推論 / ダウンロード）に「送信済み」「到着」の2本をまとめる。
+  const groups: {
+    id: string; en: string; jp: string; hint?: string;
+    bars: { id: string; en: string; jp: string; pct: number }[];
+  }[] = [
     {
-      id: 'send',
-      en: 'TRANSMIT', jp: '送信',
-      pct: sendPct,
-      statusEn: sendPct === 0 ? 'Uploading image data…' : 'Image received by server',
-      statusJp: sendPct === 0 ? '画像データを送信中…' : 'サーバーが受付完了',
+      id: 'upload', en: 'UPLOAD', jp: 'アップロード',
+      bars: [
+        { id: 'ul-sent', en: 'SENT', jp: '送信済み', pct: edgePct },        // ① 端末が送出
+        { id: 'ul-arrived', en: 'AT SERVER', jp: 'サーバへ到着', pct: aiArrivalPct }, // ② 推論サーバが受信
+      ],
     },
     {
-      id: 'infer',
-      en: 'INFERENCE', jp: '推論',
-      pct: inferPct,
-      statusEn: inferPct === 0 ? 'Awaiting pipeline…' : inferPct < 100 ? phaseLogs[Math.min(phase, 3)] : 'Model inference complete',
-      statusJp: inferPct === 0 ? 'パイプライン待機中…' : inferPct < 100 ? '推論実行中…' : 'モデル推論完了',
+      id: 'infer', en: 'INFERENCE', jp: '推論',
+      hint: inferPct > 0 && inferPct < 100 ? phaseLogs[Math.min(phase, 3)] : undefined,
+      bars: [
+        { id: 'infer', en: 'MODEL', jp: 'モデル推論', pct: inferPct },      // ③ 推論
+      ],
     },
     {
-      id: 'recv',
-      en: 'RECEIVE', jp: '受信',
-      pct: receivePct,
-      statusEn: receivePct === 0 ? 'Awaiting result transfer…' : 'Result delivered',
-      statusJp: receivePct === 0 ? '結果の受信待機中…' : '受信完了',
+      id: 'download', en: 'DOWNLOAD', jp: 'ダウンロード',
+      bars: [
+        { id: 'dl-sent', en: 'SENT', jp: '送信済み', pct: resultSentPct },  // ③' 推論サーバが送出
+        { id: 'dl-arrived', en: 'AT DEVICE', jp: '端末へ到着', pct: downloadPct }, // ④ 端末が受信
+      ],
     },
   ];
 
@@ -830,86 +861,65 @@ function ScreenProcessing({ lang, go, inputImage, onResult }: {
               </span>
             </div>
 
-            {/* Three stage rows */}
-            {pipeline.map(({ id, en, jp: labelJp, pct: stagePct, statusEn, statusJp }, idx) => {
-              const complete = stagePct >= 100;
-              const active = stagePct > 0 && stagePct < 100;
-              const pending = stagePct === 0;
-              const accentRgb = 'var(--accent)';
-
+            {/* Grouped areas: UPLOAD (2 bars) · INFERENCE · DOWNLOAD (2 bars) */}
+            {groups.map((group, gi) => {
+              const groupActive = group.bars.some((b) => b.pct > 0 && b.pct < 100);
+              const groupDone = group.bars.every((b) => b.pct >= 100);
               return (
                 <div
-                  key={id}
+                  key={group.id}
                   style={{
-                    position: 'relative',
-                    padding: '18px 16px 16px',
-                    borderBottom: idx < pipeline.length - 1 ? '1px solid var(--rule)' : 'none',
+                    borderBottom: gi < groups.length - 1 ? '1px solid var(--rule-strong)' : 'none',
+                    background: groupActive ? 'rgba(0,0,0,0.015)' : 'transparent',
                     transition: 'background 0.4s',
-                    background: active ? 'rgba(0,0,0,0.02)' : 'transparent',
-                    overflow: 'hidden',
                   }}
                 >
-                  {/* Active glow overlay */}
-                  {active && (
-                    <div style={{ position: 'absolute', inset: 0, background: accentRgb, pointerEvents: 'none', animation: 'pipelinePulse 2.4s ease-in-out infinite' }} />
-                  )}
-
-                  {/* Stage label row */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                    <div>
-                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 8, letterSpacing: '0.18em', color: pending ? 'var(--mute)' : complete ? accentRgb : 'var(--ink)', marginBottom: 2, transition: 'color 0.3s' }}>
-                        {jp ? labelJp : en}
-                      </div>
-                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 8, letterSpacing: '0.1em', color: active ? accentRgb : 'var(--mute)', transition: 'color 0.3s' }}>
-                        {active && <span style={{ animation: 'dotBlink 1.2s ease-in-out infinite', display: 'inline-block' }}>◆ </span>}
-                        {complete && '▸ '}
-                        {pending && '○ '}
-                        {jp ? statusJp : statusEn}
-                      </div>
-                    </div>
-
-                    {/* Large percentage */}
-                    <div style={{
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: complete ? 18 : 38,
-                      lineHeight: 1,
-                      fontFeatureSettings: "'tnum'",
-                      color: complete ? accentRgb : pending ? 'var(--rule-strong)' : 'var(--ink)',
-                      letterSpacing: complete ? '0.05em' : '-0.02em',
-                      transition: 'all 0.3s',
-                      minWidth: 68,
-                      textAlign: 'right',
-                      alignSelf: 'center',
-                    }}>
-                      {complete
-                        ? (jp ? '完了' : 'DONE')
-                        : `${String(stagePct).padStart(2, '0')}%`}
-                    </div>
+                  {/* Area header */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '12px 16px 8px' }}>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, letterSpacing: '0.18em', color: groupActive ? 'var(--accent)' : groupDone ? 'var(--ink)' : 'var(--mute)', transition: 'color 0.3s' }}>
+                      {jp ? group.jp : group.en}
+                    </span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 8, letterSpacing: '0.06em', color: 'var(--mute)' }}>
+                      {group.hint ?? (groupDone ? (jp ? '完了' : 'DONE') : '')}
+                    </span>
                   </div>
 
-                  {/* Progress bar track */}
-                  <div style={{ position: 'relative', height: 2, background: 'var(--rule)' }}>
-                    <div style={{
-                      position: 'absolute', left: 0, top: 0, height: '100%',
-                      width: `${stagePct}%`,
-                      background: active
-                        ? `linear-gradient(90deg, ${accentRgb}, color-mix(in srgb, var(--accent) 70%, transparent), ${accentRgb})`
-                        : accentRgb,
-                      backgroundSize: active ? '200% 100%' : '100% 100%',
-                      animation: active ? 'barShimmer 1.8s linear infinite' : 'none',
-                      transition: 'width 0.15s ease-out',
-                    }} />
-                    {/* Tick marks at 25/50/75 */}
-                    {[25, 50, 75].map(t => (
-                      <div key={t} style={{ position: 'absolute', left: `${t}%`, top: -2, width: 1, height: 6, background: 'var(--rule)', opacity: 0.6 }} />
-                    ))}
-                  </div>
-
-                  {/* Scale labels */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-                    {['0', '25', '50', '75', '100'].map(v => (
-                      <span key={v} style={{ fontFamily: 'var(--font-mono)', fontSize: 7, color: 'var(--mute)', opacity: 0.6, letterSpacing: '0.05em' }}>{v}</span>
-                    ))}
+                  {/* The 2 status bars of this area (送信済み / 到着) */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '0 16px 18px' }}>
+                    {group.bars.map((bar) => {
+                      const complete = bar.pct >= 100;
+                      const active = bar.pct > 0 && bar.pct < 100;
+                      const pending = bar.pct === 0;
+                      return (
+                        <div key={bar.id}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 7 }}>
+                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: '0.06em', fontWeight: active ? 600 : 400, color: pending ? 'var(--mute)' : active ? 'var(--accent)' : 'var(--ink)', transition: 'color 0.3s' }}>
+                              {active && <span style={{ animation: 'dotBlink 1.2s ease-in-out infinite', display: 'inline-block' }}>◆ </span>}
+                              {complete && '▸ '}
+                              {pending && '○ '}
+                              {jp ? bar.jp : bar.en}
+                            </span>
+                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 500, lineHeight: 1, fontFeatureSettings: "'tnum'", letterSpacing: '-0.01em', color: complete ? 'var(--accent)' : pending ? 'var(--rule-strong)' : 'var(--ink)', transition: 'color 0.3s' }}>
+                              {complete ? (jp ? '完了' : 'DONE') : `${String(bar.pct).padStart(2, '0')}%`}
+                            </span>
+                          </div>
+                          <div style={{ position: 'relative', height: 8, borderRadius: 99, background: 'color-mix(in oklab, var(--ink) 12%, transparent)', boxShadow: 'inset 0 1px 1px rgba(0,0,0,0.08)' }}>
+                            <div style={{
+                              position: 'absolute', left: 0, top: 0, height: '100%',
+                              width: bar.pct > 0 ? `max(${bar.pct}%, 7px)` : '0%',
+                              borderRadius: 99,
+                              background: active
+                                ? 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 65%, transparent), var(--accent))'
+                                : 'var(--accent)',
+                              backgroundSize: active ? '200% 100%' : '100% 100%',
+                              animation: active ? 'barShimmer 1.6s linear infinite' : 'none',
+                              boxShadow: active ? '0 0 8px color-mix(in srgb, var(--accent) 55%, transparent)' : 'none',
+                              transition: 'width 0.15s ease-out',
+                            }} />
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               );

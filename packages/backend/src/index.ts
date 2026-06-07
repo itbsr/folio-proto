@@ -4,13 +4,13 @@ import { zValidator } from '@hono/zod-validator';
 import { setCookie, deleteCookie, getCookie } from 'hono/cookie';
 import { registerSchema, loginSchema, processImageSchema } from '@my-app/shared';
 import { hashPassword, verifyPassword } from './lib/crypto';
-import { callDewarpNet, streamDewarpNet } from './services/ai';
+import { callDewarpNet, streamDewarpNet, uploadToAi, aiProgressStream } from './services/ai';
 import { PLAN_LIMITS } from './middleware/quota';
 import type { Context } from 'hono';
 import type { Bindings } from './types';
 
 const app = new Hono<{ Bindings: Bindings }>().basePath('/api');
-app.use('*', cors({ origin: (o) => o ?? '*', credentials: true, allowHeaders: ['Content-Type'] }));
+app.use('*', cors({ origin: (o) => o ?? '*', credentials: true, allowHeaders: ['Content-Type'], exposeHeaders: ['X-Usage', 'X-Result-Bytes'] }));
 
 // ── Auth helpers ──────────────────────────────────────────────────────────
 async function getSessionUser(c: Context<{ Bindings: Bindings }>) {
@@ -188,6 +188,92 @@ const routes = app
     })();
 
     return new Response(readable, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+      },
+    });
+  })
+
+  // ── Design A: #2 XHR — image up (request body) + result down (response body) ─
+  // ① 上り送信 and ④ 下り受信 are measured client-side on the XHR itself. This
+  // route forwards the image to the AI; once inference succeeds it records usage
+  // and streams the result (base64 text) straight back as THIS response. usage
+  // rides in the X-Usage header; Content-Length is passed through for ④ progress.
+  .post('/images/upload', async (c) => {
+    const user = await getSessionUser(c);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+    const quota = await checkQuota(c.env.DB, user.id, user.plan);
+    if (!quota.ok) return c.json({ error: 'quota_exceeded', used: quota.used, limit: quota.limit }, 429);
+
+    const jobId = c.req.query('jobId');
+    if (!jobId) return c.json({ error: 'jobId required' }, 400);
+
+    const total = Number(c.req.header('content-length') ?? 0);
+    const body = c.req.raw.body;
+    if (!body || !total) return c.json({ error: 'empty body' }, 400);
+
+    let aiRes: Response;
+    try {
+      aiRes = await uploadToAi(
+        c.env.AI_ENDPOINT, c.env.AI_API_KEY, jobId, body, total,
+        c.req.header('content-type') ?? 'application/json',
+      );
+    } catch (e) {
+      await c.env.DB.prepare('INSERT INTO usage_logs (user_id, status, error_msg) VALUES (?, ?, ?)')
+        .bind(user.id, 'error', e instanceof Error ? e.message : 'upload failed').run();
+      return c.json({ error: 'Upload failed' }, 502);
+    }
+    if (!aiRes.ok) {
+      const t = await aiRes.text().catch(() => aiRes.statusText);
+      await c.env.DB.prepare('INSERT INTO usage_logs (user_id, status, error_msg) VALUES (?, ?, ?)')
+        .bind(user.id, 'error', t.slice(0, 500)).run();
+      return c.json({ error: 'Processing failed' }, 502);
+    }
+
+    // Inference succeeded (AI is about to stream the result). Record usage now.
+    await Promise.all([
+      c.env.DB.prepare('INSERT INTO usage_logs (user_id, status) VALUES (?, ?)').bind(user.id, 'success').run(),
+      c.env.DB.prepare(
+        `INSERT INTO usage_quotas (user_id, month, count) VALUES (?, ?, 1)
+         ON CONFLICT (user_id, month) DO UPDATE SET count = count + 1`
+      ).bind(user.id, quota.month).run(),
+    ]);
+    const row = await c.env.DB.prepare(
+      'SELECT count FROM usage_quotas WHERE user_id = ? AND month = ?'
+    ).bind(user.id, quota.month).first<{ count: number }>();
+    const usage = { used: row?.count ?? 1, limit: quota.limit, month: quota.month };
+
+    // Stream the AI's result body straight back; carry usage in a header.
+    const headers = new Headers();
+    headers.set('Content-Type', aiRes.headers.get('content-type') ?? 'text/plain; charset=utf-8');
+    const cl = aiRes.headers.get('content-length');
+    if (cl) headers.set('Content-Length', cl);          // lets the browser compute ④ download %
+    const rb = aiRes.headers.get('x-result-bytes');
+    if (rb) headers.set('X-Result-Bytes', rb);          // fallback total if CL is stripped (chunked/gzip)
+    headers.set('Cache-Control', 'no-transform');       // stop CF/proxy gzip from dropping Content-Length
+    headers.set('X-Usage', JSON.stringify(usage));
+    return new Response(aiRes.body, { status: 200, headers });
+  })
+
+  // ── Design A: #1 SSE — server-side status only (② 上り受信 / ③ 推論 / ③' 下り送信) ─
+  // Pure progress side-channel; result, usage and completion are on #2 (/upload).
+  // If this drops, only the server-side bars stop — the result still arrives.
+  .get('/images/progress', async (c) => {
+    const user = await getSessionUser(c);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+    const jobId = c.req.query('jobId');
+    if (!jobId) return c.json({ error: 'jobId required' }, 400);
+
+    let aiResponse: Response;
+    try {
+      aiResponse = await aiProgressStream(c.env.AI_ENDPOINT, c.env.AI_API_KEY, jobId);
+    } catch {
+      return c.json({ error: 'Processing failed' }, 502);
+    }
+    if (!aiResponse.ok || !aiResponse.body) return c.json({ error: 'Processing failed' }, 502);
+
+    return new Response(aiResponse.body, {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
