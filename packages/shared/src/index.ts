@@ -1,4 +1,4 @@
-/**
- * Export your shared schemas and types here.
- */
-export {};
+export { registerSchema, loginSchema } from './schemas/auth';
+export { processImageSchema } from './schemas/images';
+export type { User, Plan } from './types/auth';
+export type { UsageInfo, ProcessResult, HistoryItem, ProgressEvent } from './types/images';

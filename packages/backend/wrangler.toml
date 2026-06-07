@@ -3,11 +3,29 @@ name = "my-app-backend"
 main = "src/index.ts"
 compatibility_date = "2024-04-03"
 
-# [d1_databases]
-# binding = "DB"
-# database_name = "my-db"
-# database_id = "your-database-id"
-# migrations_dir = "migrations"
+# ── Production (release) ─────────────────────────────────────────────────
+# Create once:  wrangler d1 create grad-proto-db   then paste the id below.
+# The old `my-db` (963a59c5-fb6b-4b8a-9392-c1a6fcbfc293) is intentionally left
+# untouched and is no longer referenced by this pipeline.
+[[d1_databases]]
+binding = "DB"
+database_name = "grad-proto-db"
+database_id = "372e0b01-8b4a-4a97-a647-e8d0c0f28978"
+migrations_dir = "migrations"
 
-# [vars]
-# MY_VARIABLE = "production_value"
+# ── Staging (main / PR previews) ─────────────────────────────────────────
+# Separate Worker + separate DB. Environments do NOT inherit bindings, so the
+# D1 binding is re-declared here.
+# Create once:  wrangler d1 create grad-proto-db-staging   then paste the id.
+[env.staging]
+name = "my-app-backend-staging"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "grad-proto-db-staging"
+database_id = "ecfe3f84-a920-496d-a5f4-41d64a646dd7"
+migrations_dir = "migrations"
+
+# Secrets — set PER ENVIRONMENT via `wrangler secret put <NAME> [-e staging]`:
+#   AI_ENDPOINT  — on-premise DewarpNet server URL
+#   AI_API_KEY   — Bearer token for the AI server
