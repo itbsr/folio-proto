@@ -18,6 +18,8 @@ import torch.nn.functional as F
 from models import get_model  # noqa: E402  (from DewarpNet)
 from utils import convert_state_dict  # noqa: E402  (from DewarpNet)
 
+from .imaging import decode_image  # noqa: E402
+
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -47,11 +49,7 @@ class DewarpPipeline:
 
     @staticmethod
     def _decode(image_bytes: bytes) -> np.ndarray:
-        arr = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if img is None:
-            raise ValueError("Cannot decode image — unsupported format or corrupt data")
-        return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        return decode_image(image_bytes)
 
     @staticmethod
     def _to_tensor(img_rgb: np.ndarray, size: tuple[int, int]) -> torch.Tensor:

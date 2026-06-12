@@ -12,6 +12,7 @@
     "@my-app/backend": "*",
     "@my-app/shared": "*",
     "framer-motion": "^11.2.10",
+    "heic2any": "^0.0.4",
     "hono": "^4.4.7",
     "lucide-react": "^0.395.0",
     "react": "^18.3.1",
