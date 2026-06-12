@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { Upload } from 'lucide-react';
+import { fileToBase64, isAcceptableImage, IMAGE_ACCEPT } from '../lib/imageFile';
 
 type Props = {
   onFile: (base64: string) => void;
@@ -11,13 +12,8 @@ export function ImageDropzone({ onFile, disabled }: Props) {
   const [dragging, setDragging] = useState(false);
 
   const handle = (file: File | null | undefined) => {
-    if (!file || !file.type.startsWith('image/')) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = (reader.result as string).split(',')[1];
-      onFile(result);
-    };
-    reader.readAsDataURL(file);
+    if (!file || !isAcceptableImage(file)) return;
+    fileToBase64(file).then(onFile).catch(console.error);
   };
 
   return (
@@ -39,11 +35,11 @@ export function ImageDropzone({ onFile, disabled }: Props) {
     >
       <Upload size={36} color="#9ca3af" style={{ marginBottom: 12 }} />
       <p style={{ margin: 0, color: '#374151', fontWeight: 500 }}>画像をドロップ、またはクリックして選択</p>
-      <p style={{ margin: '4px 0 0', color: '#9ca3af', fontSize: 13 }}>JPEG / PNG</p>
+      <p style={{ margin: '4px 0 0', color: '#9ca3af', fontSize: 13 }}>JPEG / PNG / HEIC</p>
       <input
         ref={inputRef}
         type="file"
-        accept="image/*"
+        accept={IMAGE_ACCEPT}
         style={{ display: 'none' }}
         onChange={(e) => handle(e.target.files?.[0])}
       />

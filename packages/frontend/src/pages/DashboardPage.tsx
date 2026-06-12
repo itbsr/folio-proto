@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import client, { API_BASE } from '../lib/hc';
+import { fileToBase64, isAcceptableImage, IMAGE_ACCEPT } from '../lib/imageFile';
 import type { UsageInfo, HistoryItem } from '@my-app/shared';
 
 // ─────────────────────────────────────────────
@@ -538,14 +539,13 @@ function ScreenUpload({ lang, go, onFile }: { lang: Lang; go: (id: ScreenId) => 
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handle = (file: File | null | undefined) => {
-    if (!file || !file.type.startsWith('image/')) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = (reader.result as string).split(',')[1];
-      onFile(result);
-      go('processing');
-    };
-    reader.readAsDataURL(file);
+    if (!file || !isAcceptableImage(file)) return;
+    fileToBase64(file)
+      .then((result) => {
+        onFile(result);
+        go('processing');
+      })
+      .catch(console.error);
   };
 
   return (
@@ -604,7 +604,7 @@ function ScreenUpload({ lang, go, onFile }: { lang: Lang; go: (id: ScreenId) => 
             </button>
             <div className="label" style={{ marginTop: 14 }}>JPG · PNG · HEIC · PDF · {jp ? '最大 50 MB' : 'up to 50 MB'}</div>
           </div>
-          <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handle(e.target.files?.[0])} />
+          <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} style={{ display: 'none' }} onChange={(e) => handle(e.target.files?.[0])} />
         </div>
 
         {/* Sidebar tips */}

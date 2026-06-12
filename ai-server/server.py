@@ -84,7 +84,7 @@ def verify_api_key(
 
 
 class ProcessRequest(BaseModel):
-    image: str  # base64-encoded image (JPEG / PNG)
+    image: str  # base64-encoded image (JPEG / PNG / HEIC / HEIF — anything OpenCV or PIL can read)
 
 
 class ProcessResponse(BaseModel):
