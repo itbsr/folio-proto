@@ -602,7 +602,7 @@ function ScreenUpload({ lang, go, onFile }: { lang: Lang; go: (id: ScreenId) => 
             <button className="btn" style={{ marginTop: 14 }} onClick={(e) => { e.stopPropagation(); fileRef.current?.click(); }}>
               {jp ? 'ファイルを選択' : 'Browse files'} <span className="arrow">→</span>
             </button>
-            <div className="label" style={{ marginTop: 14 }}>JPG · PNG · HEIC · PDF · {jp ? '最大 50 MB' : 'up to 50 MB'}</div>
+            <div className="label" style={{ marginTop: 14 }}>JPG · PNG · HEIC · {jp ? '最大 50 MB' : 'up to 50 MB'}</div>
           </div>
           <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} style={{ display: 'none' }} onChange={(e) => handle(e.target.files?.[0])} />
         </div>
@@ -611,7 +611,7 @@ function ScreenUpload({ lang, go, onFile }: { lang: Lang; go: (id: ScreenId) => 
         <aside className="col" style={{ gap: 16 }}>
           <div className="card">
             <div className="label" style={{ marginBottom: 10 }}>★ {jp ? '対応フォーマット' : 'SUPPORTED FORMATS'}</div>
-            {['JPG / JPEG', 'PNG', 'HEIC / HEIF', 'PDF'].map((f) => (
+            {['JPG / JPEG', 'PNG', 'HEIC / HEIF'].map((f) => (
               <div key={f} className="row" style={{ padding: '8px 0', borderBottom: '1px solid var(--rule)', gap: 10 }}>
                 <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)', flexShrink: 0 }} />
                 <span className="mono" style={{ fontSize: 12 }}>{f}</span>
