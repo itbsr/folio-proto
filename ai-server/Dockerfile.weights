@@ -1,0 +1,4 @@
+ARG BASE=dewarpnet-base:latest
+FROM ${BASE}
+
+COPY weights/* /app/ai-server/weights/
