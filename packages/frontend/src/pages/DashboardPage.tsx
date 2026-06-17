@@ -1363,9 +1363,11 @@ function ScreenFilter({ lang, go, resultImage }: { lang: Lang; go: (id: ScreenId
 // ─────────────────────────────────────────────
 function ScreenExport({ lang, go, resultImage }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null }) {
   const jp = lang === 'jp';
-  const [format, setFormat] = useState<'png' | 'jpg'>('png');
+  const format = 'png' as const;
   const [exporting, setExporting] = useState(false);
   const [done, setDone] = useState(false);
+  const [pdfHoveredHeader, setPdfHoveredHeader] = useState(false);
+  const [pdfHoveredCard, setPdfHoveredCard] = useState(false);
 
   const runExport = () => {
     if (!resultImage) return;
@@ -1390,11 +1392,19 @@ function ScreenExport({ lang, go, resultImage }: { lang: Lang; go: (id: ScreenId
           </h2>
         </div>
         <div className="row" style={{ gap: 8 }}>
-          {(['png', 'jpg'] as const).map((f) => (
-            <button key={f} className={'tag' + (format === f ? ' solid' : '')} style={{ cursor: 'pointer' }} onClick={() => setFormat(f)}>
-              {f.toUpperCase()}
-            </button>
-          ))}
+          <button className="tag solid" style={{ cursor: 'pointer' }}>PNG</button>
+          <span
+            style={{ position: 'relative', display: 'inline-block' }}
+            onMouseEnter={() => setPdfHoveredHeader(true)}
+            onMouseLeave={() => setPdfHoveredHeader(false)}
+          >
+            <button className="tag" disabled style={{ opacity: 0.4, cursor: 'not-allowed' }}>PDF</button>
+            {pdfHoveredHeader && (
+              <span style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: '50%', transform: 'translateX(-50%)', padding: '4px 8px', background: 'var(--ink)', color: 'var(--bg)', fontSize: 11, whiteSpace: 'nowrap', pointerEvents: 'none', letterSpacing: '0.06em' }}>
+                {jp ? '未実装' : 'Coming soon'}
+              </span>
+            )}
+          </span>
         </div>
       </div>
       <div className="rule-thick" />
@@ -1434,9 +1444,19 @@ function ScreenExport({ lang, go, resultImage }: { lang: Lang; go: (id: ScreenId
           <div className="card">
             <div className="label" style={{ marginBottom: 8 }}>{jp ? 'フォーマット' : 'FORMAT'}</div>
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-              {(['png', 'jpg'] as const).map((f) => (
-                <button key={f} className={'tag' + (format === f ? ' solid' : '')} style={{ cursor: 'pointer' }} onClick={() => setFormat(f)}>{f.toUpperCase()}</button>
-              ))}
+              <button className="tag solid" style={{ cursor: 'pointer' }}>PNG</button>
+              <span
+                style={{ position: 'relative', display: 'inline-block' }}
+                onMouseEnter={() => setPdfHoveredCard(true)}
+                onMouseLeave={() => setPdfHoveredCard(false)}
+              >
+                <button className="tag" disabled style={{ opacity: 0.4, cursor: 'not-allowed' }}>PDF</button>
+                {pdfHoveredCard && (
+                  <span style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: '50%', transform: 'translateX(-50%)', padding: '4px 8px', background: 'var(--ink)', color: 'var(--bg)', fontSize: 11, whiteSpace: 'nowrap', pointerEvents: 'none', letterSpacing: '0.06em' }}>
+                    {jp ? '未実装' : 'Coming soon'}
+                  </span>
+                )}
+              </span>
             </div>
             <div className="rule" style={{ margin: '12px 0' }} />
             <div className="row between">
