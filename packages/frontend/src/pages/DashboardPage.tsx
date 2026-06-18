@@ -1440,13 +1440,15 @@ function ScreenFilter({ lang, go, resultImage, viewIdx, totalJobs, onViewChange 
 // ─────────────────────────────────────────────
 // SCREEN 08 · EXPORT
 // ─────────────────────────────────────────────
-function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onViewChange }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null; fileName?: string | null; viewIdx: number; totalJobs: number; onViewChange: (idx: number) => void; }) {
+function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onViewChange, allJobs }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null; fileName?: string | null; viewIdx: number; totalJobs: number; onViewChange: (idx: number) => void; allJobs?: Array<{ resultImage: string; fileName: string }>; }) {
   const jp = lang === 'jp';
   const format = 'png' as const;
   const [exporting, setExporting] = useState(false);
   const [done, setDone] = useState(false);
   const [pdfHoveredHeader, setPdfHoveredHeader] = useState(false);
   const [pdfHoveredCard, setPdfHoveredCard] = useState(false);
+  const [downloadingAll, setDownloadingAll] = useState(false);
+  const [allDone, setAllDone] = useState(false);
 
   const baseName = fileName
     ? fileName.replace(/\.[^/.]+$/, '')
@@ -1463,6 +1465,29 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
       setExporting(false);
       setDone(true);
     }, 600);
+  };
+
+  const downloadAll = async () => {
+    if (!allJobs || allJobs.length < 2) return;
+    setDownloadingAll(true);
+    try {
+      const JSZip = (await import('jszip')).default;
+      const zip = new JSZip();
+      for (const job of allJobs) {
+        const base = job.fileName.replace(/\.[^/.]+$/, '');
+        zip.file(`${base}-corrected.${format}`, job.resultImage, { base64: true });
+      }
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `folio-corrected-${new Date().toISOString().slice(0, 10)}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setAllDone(true);
+    } finally {
+      setDownloadingAll(false);
+    }
   };
 
   return (
@@ -1548,6 +1573,15 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
               <span className="mono" style={{ fontSize: 12, color: 'var(--accent)' }}>≈ 2.4 MB</span>
             </div>
           </div>
+          {allJobs && allJobs.length > 1 && (
+            <button className="btn accent lg full" onClick={downloadAll} disabled={downloadingAll} style={{ justifyContent: 'center' }}>
+              {downloadingAll
+                ? (jp ? '★ 準備中…' : '★ Preparing…')
+                : allDone
+                  ? (jp ? `✓ ${allJobs.length}枚を保存しました` : `✓ Saved ${allJobs.length} files`)
+                  : (jp ? `すべてダウンロード (${allJobs.length}枚)` : `Download All (${allJobs.length} files) →`)}
+            </button>
+          )}
           <button className="btn accent lg full" onClick={runExport} disabled={exporting || !resultImage} style={{ justifyContent: 'center' }}>
             {exporting ? (jp ? '★ 処理中…' : '★ Saving…') : done ? (jp ? '✓ 保存しました' : '✓ Saved') : (<>{jp ? 'ダウンロード' : 'Download'} <span className="arrow">→</span></>)}
           </button>
@@ -1852,10 +1886,14 @@ export function DashboardPage() {
       }
       case 'export': {
         const vj = fileQueue[viewIdx] ?? null;
+        const allJobs = fileQueue
+          .filter(j => j.resultImage !== null)
+          .map(j => ({ resultImage: j.resultImage!, fileName: j.file.name }));
         return <ScreenExport {...screenProps}
           resultImage={vj?.resultImage ?? null}
           fileName={vj?.file.name ?? null}
-          viewIdx={viewIdx} totalJobs={fileQueue.length} onViewChange={setViewIdx} />;
+          viewIdx={viewIdx} totalJobs={fileQueue.length} onViewChange={setViewIdx}
+          allJobs={allJobs} />;
       }
       case 'history': return <ScreenHistory {...screenProps} history={history} />;
       default:        return <ScreenHome {...screenProps} usage={usage} history={history} />;
