@@ -2,14 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Rules
-
-Before generating or modifying any code, read both rule files:
-1. `.agent/rules/architecture.md` — monorepo architecture rules and development workflow
-2. `.agent/rules/cloude.md` — agent behavior: planning, verification, task management, communication
-
-These rules are `trigger: always_on` and must not be ignored.
-
 ## Commands
 
 ```bash
@@ -80,3 +72,45 @@ Session-based: login sets an HTTP-only cookie (`SameSite=None; Secure` for cross
 - **Backend:** Cloudflare Workers (via Wrangler), database is Cloudflare D1
 - **Frontend:** Static assets (Cloudflare Pages, Vercel, etc.)
 - **AI Server:** Docker, requires `API_KEY` env var for auth
+
+## Anti-Patterns
+
+- Duplicate type/interface definitions across packages — all types come from `shared/`
+- `backend/` importing from `frontend/`
+- `shared/` importing `react`, `hono`, or any framework package
+- Raw `fetch` or `axios` in frontend — use the Hono RPC client (`hc`) only
+- Running `npm install` inside a package subdirectory
+
+## Agent Behavior
+
+### Planning
+
+- For tasks with 3+ steps, multiple file changes, or architectural decisions, create a checklist in `tasks/todo.md` before starting.
+- Include verification steps (lint/typecheck/build/manual check) in the plan from the start.
+- If requirements are ambiguous, write out explicit input/output/edge-case specs first.
+
+### Task management (`tasks/todo.md`)
+
+- Keep exactly one item "in progress" at a time.
+- Include acceptance criteria and a short "Results" section (what changed, where, how verified).
+- After fixes or postmortems, append a new entry to `tasks/lessons.md`: failure mode, detection signal, prevention rule.
+- Review `tasks/lessons.md` at session start and before large refactors.
+
+### Definition of Done
+
+A task is complete only when:
+1. Behavior matches acceptance criteria.
+2. Relevant tests/lint/typecheck/build pass (or skipped with documented reason).
+3. A short verification story exists: what changed and how it was confirmed.
+
+### Error recovery
+
+When an unexpected failure occurs (test failure, build error, regression): stop adding features, save the evidence, and return to diagnose + replan.
+
+Triage order: reproduce → localize (which layer: UI/API/DB/build) → reduce to minimal case → fix root cause → add regression coverage → verify end-to-end.
+
+### Communication
+
+- Report results and impact, not process narration.
+- Ask at most one focused question when blocked; include a recommended default and explain what the answer changes.
+- Always state what was run (test/lint/build) and what the outcome was.
