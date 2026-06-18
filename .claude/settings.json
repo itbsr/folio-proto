@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "INPUT=$(cat); CMD=$(echo \"$INPUT\" | jq -r '.tool_input.command // \"\"'); if echo \"$CMD\" | grep -qE 'git push'; then BRANCH=$(git branch --show-current 2>/dev/null); if echo \"$BRANCH\" | grep -q '^claude/'; then printf '{\"decision\":\"block\",\"reason\":\"Branch name \\u2018%s\\u2019 starts with claude/ which is an auto-generated name. Rename it to a descriptive name (e.g. feat/..., fix/..., docs/...) before pushing.\"}' \"$BRANCH\"; exit 2; fi; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
