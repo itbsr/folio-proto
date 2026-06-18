@@ -58,6 +58,22 @@ function applyTheme(id: ThemeId) {
 type ScreenId = 'home' | 'capture' | 'upload' | 'processing' | 'compare' | 'adjust' | 'filter' | 'export' | 'history';
 type Lang = 'jp' | 'en';
 
+// ─────────────────────────────────────────────
+// FILE QUEUE (issue #3 — multi-file support)
+// ─────────────────────────────────────────────
+type JobStatus = 'pending' | 'processing' | 'done' | 'error';
+
+type FileJob = {
+  id: string;
+  file: File;
+  inputImage: string | null;
+  resultImage: string | null;
+  errorMsg: string | null;
+  status: JobStatus;
+};
+
+type QueueSummaryItem = { id: string; fileName: string; status: JobStatus };
+
 const NAV_ITEMS: { id: ScreenId; no: string; label: Record<Lang, string>; kbd: string }[] = [
   { id: 'home',       no: '01', label: { jp: 'ホーム',         en: 'Home'        }, kbd: '1' },
   { id: 'capture',    no: '02', label: { jp: '撮影',           en: 'Capture'     }, kbd: '2' },
@@ -531,21 +547,36 @@ function ScreenCapture({ lang, go }: { lang: Lang; go: (id: ScreenId) => void })
 }
 
 // ─────────────────────────────────────────────
+// JOB SWITCHER (reusable across result screens)
+// ─────────────────────────────────────────────
+function JobSwitcher({ viewIdx, totalJobs, onViewChange, lang }: {
+  viewIdx: number; totalJobs: number;
+  onViewChange: (idx: number) => void; lang: Lang;
+}) {
+  if (totalJobs <= 1) return null;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+      <button className="btn ghost" style={{ padding: '4px 10px' }} disabled={viewIdx === 0} onClick={() => onViewChange(viewIdx - 1)}>←</button>
+      <span style={{ color: 'var(--mute)', letterSpacing: '0.08em' }}>{viewIdx + 1} {lang === 'jp' ? '/' : 'of'} {totalJobs}</span>
+      <button className="btn ghost" style={{ padding: '4px 10px' }} disabled={viewIdx === totalJobs - 1} onClick={() => onViewChange(viewIdx + 1)}>→</button>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // SCREEN 03 · UPLOAD
 // ─────────────────────────────────────────────
-function ScreenUpload({ lang, go, onFile }: { lang: Lang; go: (id: ScreenId) => void; onFile: (b64: string) => void }) {
+function ScreenUpload({ lang, go, onFiles }: { lang: Lang; go: (id: ScreenId) => void; onFiles: (files: File[]) => void }) {
   const jp = lang === 'jp';
   const [over, setOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const handle = (file: File | null | undefined) => {
-    if (!file || !isAcceptableImage(file)) return;
-    fileToBase64(file)
-      .then((result) => {
-        onFile(result);
-        go('processing');
-      })
-      .catch(console.error);
+  const handle = (fileList: FileList | null | undefined) => {
+    if (!fileList || fileList.length === 0) return;
+    const valid = Array.from(fileList).filter(isAcceptableImage);
+    if (valid.length === 0) return;
+    onFiles(valid);
+    // Navigation to 'processing' is triggered from DashboardPage after first file converts
   };
 
   return (
@@ -568,7 +599,7 @@ function ScreenUpload({ lang, go, onFile }: { lang: Lang; go: (id: ScreenId) => 
         <div
           onDragOver={(e) => { e.preventDefault(); setOver(true); }}
           onDragLeave={() => setOver(false)}
-          onDrop={(e) => { e.preventDefault(); setOver(false); handle(e.dataTransfer.files[0]); }}
+          onDrop={(e) => { e.preventDefault(); setOver(false); handle(e.dataTransfer.files); }}
           onClick={() => fileRef.current?.click()}
           style={{
             position: 'relative', minHeight: 400, cursor: 'copy',
@@ -596,7 +627,7 @@ function ScreenUpload({ lang, go, onFile }: { lang: Lang; go: (id: ScreenId) => 
               </svg>
             </div>
             <div className="serif" style={{ fontSize: 36, lineHeight: 1, marginBottom: 8 }}>
-              {over ? (jp ? 'ここに離す' : 'Release') : (jp ? 'ファイルをここへ落とす' : 'Drop a document here')}
+              {over ? (jp ? 'ここに離す' : 'Release') : (jp ? 'ファイルを落とす（複数可）' : 'Drop documents here')}
             </div>
             <div className="label">{jp ? 'または' : 'or'}</div>
             <button className="btn" style={{ marginTop: 14 }} onClick={(e) => { e.stopPropagation(); fileRef.current?.click(); }}>
@@ -604,7 +635,7 @@ function ScreenUpload({ lang, go, onFile }: { lang: Lang; go: (id: ScreenId) => 
             </button>
             <div className="label" style={{ marginTop: 14 }}>JPG · PNG · HEIC · {jp ? '最大 50 MB' : 'up to 50 MB'}</div>
           </div>
-          <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} style={{ display: 'none' }} onChange={(e) => handle(e.target.files?.[0])} />
+          <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} multiple style={{ display: 'none' }} onChange={(e) => handle(e.target.files)} />
         </div>
 
         {/* Sidebar tips */}
@@ -622,13 +653,10 @@ function ScreenUpload({ lang, go, onFile }: { lang: Lang; go: (id: ScreenId) => 
             <div className="label" style={{ color: 'var(--accent)', marginBottom: 8 }}>★ TIP</div>
             <p className="serif italic" style={{ margin: 0, fontSize: 15, lineHeight: 1.4 }}>
               {jp
-                ? '複数のファイルを選択すると、それぞれ別ページとして PDF にまとめられます。'
-                : 'Select many files and Folio will bind them as separate pages of one PDF.'}
+                ? '複数のファイルを選択すると、1枚ずつ順番に自動補正されます。'
+                : 'Select multiple files and Folio will correct each one in sequence.'}
             </p>
           </div>
-          <button className="btn accent full" onClick={() => go('processing')}>
-            {jp ? '次へ：自動補正' : 'Next · Auto-correct'} <span className="arrow">→</span>
-          </button>
         </aside>
       </div>
     </div>
@@ -638,10 +666,14 @@ function ScreenUpload({ lang, go, onFile }: { lang: Lang; go: (id: ScreenId) => 
 // ─────────────────────────────────────────────
 // SCREEN 04 · PROCESSING
 // ─────────────────────────────────────────────
-function ScreenProcessing({ lang, go, inputImage, onResult }: {
+function ScreenProcessing({ lang, go, job, jobIndex, totalJobs, queueSummary, onResult, onError }: {
   lang: Lang; go: (id: ScreenId) => void;
-  inputImage: string | null; onResult: (result: string, usage: UsageInfo) => void;
+  job: FileJob; jobIndex: number; totalJobs: number;
+  queueSummary: QueueSummaryItem[];
+  onResult: (jobId: string, result: string, usage: UsageInfo) => void;
+  onError: (jobId: string, msg: string) => void;
 }) {
+  const inputImage = job.inputImage;
   const jp = lang === 'jp';
   const [pct, setPct] = useState(0);
   const [phase, setPhase] = useState(0);
@@ -652,6 +684,7 @@ function ScreenProcessing({ lang, go, inputImage, onResult }: {
   const [resultSentPct, setResultSentPct] = useState(0); // ③' 下り送信  (SSE result_sent)
   const [downloadPct, setDownloadPct] = useState(0);     // ④ 下り受信   (XHR onprogress)
   const startTime = useRef(Date.now());
+  const hasStarted = useRef(false);
 
   const phaseLogs = ['DECODE / PREPROCESS', 'WC MODEL INFERENCE', 'BM MODEL INFERENCE', 'UNWARP / ENCODE'];
 
@@ -663,7 +696,8 @@ function ScreenProcessing({ lang, go, inputImage, onResult }: {
   };
 
   useEffect(() => {
-    if (!inputImage) return;
+    if (!inputImage || hasStarted.current) return;
+    hasStarted.current = true;
 
     const jobId = crypto.randomUUID();
     let settled = false;
@@ -700,10 +734,12 @@ function ScreenProcessing({ lang, go, inputImage, onResult }: {
           setResultSentPct(100);
           es.close();
           break;
-        case 'error':
-          if (!settled) { setError((ev.message as string) ?? (jp ? '処理に失敗しました' : 'Processing failed')); finish(); }
+        case 'error': {
+          const msg = (ev.message as string) ?? (jp ? '処理に失敗しました' : 'Processing failed');
+          if (!settled) { setError(msg); onError(job.id, msg); finish(); }
           es.close();
           break;
+        }
       }
     };
     es.onerror = () => es.close(); // 結果は XHR 側で受領するため切断は致命でない
@@ -736,21 +772,23 @@ function ScreenProcessing({ lang, go, inputImage, onResult }: {
         try { usage = JSON.parse(xhr.getResponseHeader('X-Usage') ?? 'null') ?? undefined; } catch { /* best-effort */ }
         finish();
         es.close();
-        onResult(xhr.responseText, usage as UsageInfo);
-        setTimeout(() => go('compare'), 700);
+        onResult(job.id, xhr.responseText, usage as UsageInfo);
       } else {
         let msg = xhr.status === 429
           ? (jp ? '処理上限に達しました' : 'Quota exceeded')
           : (jp ? '処理に失敗しました' : 'Processing failed');
         if (xhr.status !== 429) { try { msg = (JSON.parse(xhr.responseText).error as string) ?? msg; } catch { /* keep */ } }
         setError(msg);
+        onError(job.id, msg);
         finish();
         es.close();
       }
     };
     xhr.onerror = () => {
       if (settled) return;
-      setError(jp ? 'ネットワークエラー' : 'Network error');
+      const msg = jp ? 'ネットワークエラー' : 'Network error';
+      setError(msg);
+      onError(job.id, msg);
       finish();
       es.close();
     };
@@ -763,7 +801,7 @@ function ScreenProcessing({ lang, go, inputImage, onResult }: {
       xhr.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [inputImage]);
 
   const elapsed = (Date.now() - startTime.current) / 1000;
   const sec = elapsed.toFixed(1);
@@ -852,6 +890,36 @@ function ScreenProcessing({ lang, go, inputImage, onResult }: {
 
         {/* Pipeline panel */}
         <aside className="col" style={{ gap: 0 }}>
+
+          {/* Queue summary — only shown when there are multiple jobs */}
+          {totalJobs > 1 && (
+            <div style={{ border: '1px solid var(--rule-strong)', marginBottom: 14, overflow: 'hidden' }}>
+              <div style={{ padding: '8px 14px', borderBottom: '1px solid var(--rule-strong)', fontFamily: 'var(--font-mono)', fontSize: 9, letterSpacing: '0.16em', color: 'var(--mute)' }}>
+                QUEUE · {jobIndex + 1} / {totalJobs}
+              </div>
+              {queueSummary.map((item, i) => {
+                const icon = item.status === 'done' ? '▸' : item.status === 'error' ? '✕' : i === jobIndex ? '◆' : '○';
+                const color = item.status === 'done' ? 'var(--ink)' : item.status === 'error' ? 'var(--accent)' : i === jobIndex ? 'var(--accent)' : 'var(--mute)';
+                return (
+                  <div key={item.id} style={{
+                    padding: '6px 14px',
+                    borderBottom: i < queueSummary.length - 1 ? '1px solid var(--rule)' : 'none',
+                    background: i === jobIndex ? 'color-mix(in oklab, var(--accent) 6%, var(--bg))' : 'transparent',
+                    fontFamily: 'var(--font-mono)', fontSize: 11,
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  }}>
+                    <span style={{ color, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>
+                      {icon} {item.fileName}
+                    </span>
+                    <span style={{ color: 'var(--mute)', fontSize: 9, flexShrink: 0, marginLeft: 8 }}>
+                      {item.status.toUpperCase()}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           <div style={{ border: '1px solid var(--rule-strong)', overflow: 'hidden' }}>
             {/* Panel header */}
             <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--rule-strong)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -931,7 +999,12 @@ function ScreenProcessing({ lang, go, inputImage, onResult }: {
             <div className="card" style={{ borderColor: 'var(--accent)', marginTop: 12 }}>
               <div className="label" style={{ color: 'var(--accent)', marginBottom: 6 }}>ERROR</div>
               <p style={{ margin: 0, fontSize: 13, color: 'var(--mute)' }}>{error}</p>
-              <button className="btn ghost" style={{ marginTop: 12, width: '100%', justifyContent: 'center' }} onClick={() => go('upload')}>
+              {totalJobs > 1 && jobIndex < totalJobs - 1 && (
+                <button className="btn ghost" style={{ marginTop: 12, width: '100%', justifyContent: 'center' }} onClick={() => onError(job.id, error)}>
+                  {jp ? '次のファイルへスキップ →' : 'Skip to next →'}
+                </button>
+              )}
+              <button className="btn ghost" style={{ marginTop: 8, width: '100%', justifyContent: 'center' }} onClick={() => go('upload')}>
                 ← {jp ? '戻る' : 'Back to upload'}
               </button>
             </div>
@@ -945,9 +1018,10 @@ function ScreenProcessing({ lang, go, inputImage, onResult }: {
 // ─────────────────────────────────────────────
 // SCREEN 05 · COMPARE (Before/After)
 // ─────────────────────────────────────────────
-function ScreenCompare({ lang, go, inputImage, resultImage }: {
+function ScreenCompare({ lang, go, inputImage, resultImage, viewIdx, totalJobs, onViewChange }: {
   lang: Lang; go: (id: ScreenId) => void;
   inputImage: string | null; resultImage: string | null;
+  viewIdx: number; totalJobs: number; onViewChange: (idx: number) => void;
 }) {
   const jp = lang === 'jp';
   const [pos, setPos] = useState(48);
@@ -993,6 +1067,7 @@ function ScreenCompare({ lang, go, inputImage, resultImage }: {
           </h2>
         </div>
         <div className="row" style={{ gap: 8 }}>
+          <JobSwitcher viewIdx={viewIdx} totalJobs={totalJobs} onViewChange={onViewChange} lang={lang} />
           {(['split', 'stack', 'overlay'] as const).map((m) => (
             <button key={m} className={'tag' + (mode === m ? ' solid' : '')} style={{ cursor: 'pointer' }} onClick={() => setMode(m)}>
               {modeLabels[m]}
@@ -1116,7 +1191,7 @@ function ScreenCompare({ lang, go, inputImage, resultImage }: {
 // ─────────────────────────────────────────────
 // SCREEN 06 · ADJUST
 // ─────────────────────────────────────────────
-function ScreenAdjust({ lang, go, resultImage }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null }) {
+function ScreenAdjust({ lang, go, resultImage, viewIdx, totalJobs, onViewChange }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null; viewIdx: number; totalJobs: number; onViewChange: (idx: number) => void; }) {
   const jp = lang === 'jp';
   const [corners, setCorners] = useState([
     { x: 18, y: 12 }, { x: 88, y: 16 }, { x: 86, y: 92 }, { x: 14, y: 88 },
@@ -1167,6 +1242,7 @@ function ScreenAdjust({ lang, go, resultImage }: { lang: Lang; go: (id: ScreenId
           </h2>
         </div>
         <div className="row" style={{ gap: 8 }}>
+          <JobSwitcher viewIdx={viewIdx} totalJobs={totalJobs} onViewChange={onViewChange} lang={lang} />
           <button className="btn ghost" onClick={reset}>{jp ? '元に戻す' : 'Reset'}</button>
           <button className="btn ghost" onClick={snap}>⌂ {jp ? '外枠にスナップ' : 'Snap to frame'}</button>
         </div>
@@ -1267,7 +1343,7 @@ const FILTER_PRESETS = [
   { id: 'amber',      jp: 'アンバー',         en: 'Amber',       f: 'sepia(0.6) contrast(1.12) brightness(1.04) saturate(1.2)', desc_jp: '原稿用紙の温かみ', desc_en: 'Manuscript warmth' },
 ];
 
-function ScreenFilter({ lang, go, resultImage }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null }) {
+function ScreenFilter({ lang, go, resultImage, viewIdx, totalJobs, onViewChange }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null; viewIdx: number; totalJobs: number; onViewChange: (idx: number) => void; }) {
   const jp = lang === 'jp';
   const [preset, setPreset] = useState('paperwhite');
   const [bright, setBright] = useState(0);
@@ -1287,9 +1363,12 @@ function ScreenFilter({ lang, go, resultImage }: { lang: Lang; go: (id: ScreenId
             {jp ? '紙の質感に、もう一手間。' : 'A little more polish on the page.'}
           </h2>
         </div>
-        <button className="btn ghost" onClick={() => { setBright(0); setContrast(0); setWarm(0); setSharp(0); setPreset('paperwhite'); }}>
-          ↺ {jp ? 'リセット' : 'Reset'}
-        </button>
+        <div className="row" style={{ gap: 8 }}>
+          <JobSwitcher viewIdx={viewIdx} totalJobs={totalJobs} onViewChange={onViewChange} lang={lang} />
+          <button className="btn ghost" onClick={() => { setBright(0); setContrast(0); setWarm(0); setSharp(0); setPreset('paperwhite'); }}>
+            ↺ {jp ? 'リセット' : 'Reset'}
+          </button>
+        </div>
       </div>
       <div className="rule-thick" />
 
@@ -1361,7 +1440,7 @@ function ScreenFilter({ lang, go, resultImage }: { lang: Lang; go: (id: ScreenId
 // ─────────────────────────────────────────────
 // SCREEN 08 · EXPORT
 // ─────────────────────────────────────────────
-function ScreenExport({ lang, go, resultImage }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null }) {
+function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onViewChange }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null; fileName?: string | null; viewIdx: number; totalJobs: number; onViewChange: (idx: number) => void; }) {
   const jp = lang === 'jp';
   const format = 'png' as const;
   const [exporting, setExporting] = useState(false);
@@ -1369,13 +1448,17 @@ function ScreenExport({ lang, go, resultImage }: { lang: Lang; go: (id: ScreenId
   const [pdfHoveredHeader, setPdfHoveredHeader] = useState(false);
   const [pdfHoveredCard, setPdfHoveredCard] = useState(false);
 
+  const baseName = fileName
+    ? fileName.replace(/\.[^/.]+$/, '')
+    : `folio-${new Date().toISOString().slice(0, 10)}`;
+
   const runExport = () => {
     if (!resultImage) return;
     setExporting(true);
     setTimeout(() => {
       const a = document.createElement('a');
       a.href = `data:image/${format};base64,${resultImage}`;
-      a.download = `folio-${new Date().toISOString().slice(0, 10)}.${format}`;
+      a.download = `${baseName}-corrected.${format}`;
       a.click();
       setExporting(false);
       setDone(true);
@@ -1392,6 +1475,7 @@ function ScreenExport({ lang, go, resultImage }: { lang: Lang; go: (id: ScreenId
           </h2>
         </div>
         <div className="row" style={{ gap: 8 }}>
+          <JobSwitcher viewIdx={viewIdx} totalJobs={totalJobs} onViewChange={onViewChange} lang={lang} />
           <button className="tag solid" style={{ cursor: 'pointer' }}>PNG</button>
           <span
             style={{ position: 'relative', display: 'inline-block' }}
@@ -1427,7 +1511,7 @@ function ScreenExport({ lang, go, resultImage }: { lang: Lang; go: (id: ScreenId
             <div style={{ marginTop: 16, padding: '14px 18px', background: 'var(--ink)', color: 'var(--bg)', display: 'flex', alignItems: 'center', gap: 12 }}>
               <span style={{ color: 'var(--accent)', fontSize: 18 }}>✓</span>
               <span className="mono" style={{ fontSize: 12, letterSpacing: '0.1em' }}>
-                {jp ? '保存しました' : 'SAVED'} — folio-{new Date().toISOString().slice(0, 10)}.{format}
+                {jp ? '保存しました' : 'SAVED'} — {baseName}-corrected.{format}
               </span>
             </div>
           )}
@@ -1438,7 +1522,7 @@ function ScreenExport({ lang, go, resultImage }: { lang: Lang; go: (id: ScreenId
           <div className="card">
             <div className="label" style={{ marginBottom: 8 }}>{jp ? 'ファイル名' : 'FILENAME'}</div>
             <div className="mono" style={{ fontSize: 13, padding: '8px 10px', border: '1px dashed var(--rule-strong)' }}>
-              folio-{new Date().toISOString().slice(0, 10)}.{format}
+              {baseName}-corrected.{format}
             </div>
           </div>
           <div className="card">
@@ -1592,8 +1676,15 @@ export function DashboardPage() {
   // Data state
   const [usage, setUsage] = useState<UsageInfo | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [inputImage, setInputImage] = useState<string | null>(null);
-  const [resultImage, setResultImage] = useState<string | null>(null);
+
+  // File queue state (multi-file support)
+  const [fileQueue, setFileQueue] = useState<FileJob[]>([]);
+  const fileQueueRef = useRef<FileJob[]>([]);
+  const [processingIdx, setProcessingIdx] = useState(0);
+  const [viewIdx, setViewIdx] = useState(0);
+
+  // Keep ref in sync for stale-closure-safe reads
+  useEffect(() => { fileQueueRef.current = fileQueue; }, [fileQueue]);
 
   // Apply theme on mount and change
   useEffect(() => { applyTheme(theme); }, [theme]);
@@ -1641,35 +1732,133 @@ export function DashboardPage() {
     setTheme(next);
   };
 
-  const handleFile = (b64: string) => {
-    setInputImage(b64);
-    setResultImage(null);
-  };
-
-  const handleResult = (result: string, newUsage: UsageInfo) => {
-    setResultImage(result);
-    setUsage(newUsage);
-    // Refresh history
+  const refreshHistory = () => {
     client.api.images.history.$get().then((r) => r.json() as Promise<unknown>).then((data) => {
       const d = data as Record<string, unknown>;
       if ('history' in d) setHistory(d.history as HistoryItem[]);
     }).catch(() => {});
   };
 
+  const advanceQueue = () => {
+    const next = processingIdx + 1;
+    const total = fileQueueRef.current.length;
+    if (next < total) {
+      setFileQueue((q) => q.map((j, i) => i === next ? { ...j, status: 'processing' as JobStatus } : j));
+      setProcessingIdx(next);
+    } else {
+      setViewIdx(0);
+      go('compare');
+    }
+  };
+
+  const handleFiles = (files: File[]) => {
+    const valid = files.filter(isAcceptableImage);
+    if (!valid.length) return;
+
+    const jobs: FileJob[] = valid.map((f) => ({
+      id: crypto.randomUUID(),
+      file: f,
+      inputImage: null,
+      resultImage: null,
+      errorMsg: null,
+      status: 'pending' as JobStatus,
+    }));
+
+    setFileQueue(jobs);
+    fileQueueRef.current = jobs;
+    setProcessingIdx(0);
+    setViewIdx(0);
+
+    // Convert files to base64 concurrently; navigate to processing after the first is ready
+    jobs.forEach((job, i) => {
+      fileToBase64(job.file)
+        .then((b64) => {
+          setFileQueue((prev) =>
+            prev.map((j) =>
+              j.id === job.id
+                ? { ...j, inputImage: b64, status: i === 0 ? 'processing' : j.status }
+                : j,
+            ),
+          );
+          if (i === 0) go('processing');
+        })
+        .catch((err) => {
+          console.error(err);
+          setFileQueue((prev) =>
+            prev.map((j) =>
+              j.id === job.id ? { ...j, status: 'error', errorMsg: 'File conversion failed' } : j,
+            ),
+          );
+          if (i === 0) advanceQueue();
+        });
+    });
+  };
+
+  const handleJobResult = (jobId: string, result: string, newUsage: UsageInfo) => {
+    setFileQueue((q) => q.map((j) => j.id === jobId ? { ...j, resultImage: result, status: 'done' as JobStatus } : j));
+    setUsage(newUsage);
+    refreshHistory();
+    advanceQueue();
+  };
+
+  const handleJobError = (jobId: string, errorMsg: string) => {
+    setFileQueue((q) => q.map((j) => j.id === jobId ? { ...j, status: 'error' as JobStatus, errorMsg } : j));
+    setTimeout(advanceQueue, 1500);
+  };
+
   const screenProps = { lang, go };
 
   const renderScreen = () => {
     switch (active) {
-      case 'home':       return <ScreenHome       {...screenProps} usage={usage}         history={history} />;
-      case 'capture':    return <ScreenCapture    {...screenProps} />;
-      case 'upload':     return <ScreenUpload     {...screenProps} onFile={handleFile} />;
-      case 'processing': return <ScreenProcessing {...screenProps} inputImage={inputImage} onResult={handleResult} />;
-      case 'compare':    return <ScreenCompare    {...screenProps} inputImage={inputImage} resultImage={resultImage} />;
-      case 'adjust':     return <ScreenAdjust     {...screenProps} resultImage={resultImage} />;
-      case 'filter':     return <ScreenFilter     {...screenProps} resultImage={resultImage} />;
-      case 'export':     return <ScreenExport     {...screenProps} resultImage={resultImage} />;
-      case 'history':    return <ScreenHistory    {...screenProps} history={history} />;
-      default:           return <ScreenHome       {...screenProps} usage={usage} history={history} />;
+      case 'home':    return <ScreenHome {...screenProps} usage={usage} history={history} />;
+      case 'capture': return <ScreenCapture {...screenProps} />;
+      case 'upload':  return <ScreenUpload {...screenProps} onFiles={handleFiles} />;
+      case 'processing': {
+        const currentJob = fileQueue[processingIdx];
+        if (!currentJob) return <ScreenUpload {...screenProps} onFiles={handleFiles} />;
+        const queueSummary: QueueSummaryItem[] = fileQueue.map((j) => ({
+          id: j.id, fileName: j.file.name, status: j.status,
+        }));
+        return (
+          <ScreenProcessing
+            key={currentJob.id}
+            {...screenProps}
+            job={currentJob}
+            jobIndex={processingIdx}
+            totalJobs={fileQueue.length}
+            queueSummary={queueSummary}
+            onResult={handleJobResult}
+            onError={handleJobError}
+          />
+        );
+      }
+      case 'compare': {
+        const vj = fileQueue[viewIdx] ?? null;
+        return <ScreenCompare {...screenProps}
+          inputImage={vj?.inputImage ?? null} resultImage={vj?.resultImage ?? null}
+          viewIdx={viewIdx} totalJobs={fileQueue.length} onViewChange={setViewIdx} />;
+      }
+      case 'adjust': {
+        const vj = fileQueue[viewIdx] ?? null;
+        return <ScreenAdjust {...screenProps}
+          resultImage={vj?.resultImage ?? null}
+          viewIdx={viewIdx} totalJobs={fileQueue.length} onViewChange={setViewIdx} />;
+      }
+      case 'filter': {
+        const vj = fileQueue[viewIdx] ?? null;
+        return <ScreenFilter {...screenProps}
+          resultImage={vj?.resultImage ?? null}
+          viewIdx={viewIdx} totalJobs={fileQueue.length} onViewChange={setViewIdx} />;
+      }
+      case 'export': {
+        const vj = fileQueue[viewIdx] ?? null;
+        return <ScreenExport {...screenProps}
+          resultImage={vj?.resultImage ?? null}
+          fileName={vj?.file.name ?? null}
+          viewIdx={viewIdx} totalJobs={fileQueue.length} onViewChange={setViewIdx} />;
+      }
+      case 'history': return <ScreenHistory {...screenProps} history={history} />;
+      default:        return <ScreenHome {...screenProps} usage={usage} history={history} />;
     }
   };
 
