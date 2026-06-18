@@ -28,6 +28,23 @@ make logs     # Tail container logs
 
 **Never run `npm install` inside a package subdirectory.** All dependency management goes through the root workspace.
 
+## Environment Variables
+
+### Backend (Wrangler secrets — set per environment)
+
+```bash
+wrangler secret put AI_ENDPOINT   # URL of the FastAPI AI server, e.g. http://localhost:8000
+wrangler secret put AI_API_KEY    # Bearer token for AI server auth
+```
+
+Both must be set for staging/production. The AI server validates `Authorization: Bearer <AI_API_KEY>` on every request.
+
+### Frontend
+
+| Variable | Purpose |
+|---|---|
+| `VITE_API_URL` | Backend origin in production (e.g. `https://api.example.com`). Omit in dev — Vite proxies `/api` to `http://localhost:8787`. |
+
 ## Architecture
 
 This is an `npm workspaces` monorepo with three TypeScript packages plus a Python AI server:
@@ -47,6 +64,13 @@ ai-server/           → FastAPI + DewarpNet model (Docker)
 
 **`packages/frontend/`** communicates with the backend exclusively via the Hono RPC client defined in `src/lib/hc.ts` — never raw `fetch` or axios. Form validation uses shared Zod schemas directly (no duplicate type definitions).
 
+### TypeScript path aliases
+
+```
+@my-app/shared   → packages/shared/src/index.ts
+@my-app/backend  → packages/backend/src/index.ts  (imported by frontend for AppType only)
+```
+
 ### Mandatory development order for new features
 
 1. Define/update Zod schema in `shared/src/schemas/` and re-export from `shared/src/index.ts`
@@ -61,11 +85,28 @@ The backend offers three endpoints for image dewarping:
 - `POST /api/images/process-stream` — SSE stream with progress stages: `received → infer → done`
 - `POST /api/images/upload` + `GET /api/images/progress` — separate upload (XHR byte-progress) + SSE progress stream; the most complete option, tracking 4 phases
 
-The backend forwards images as base64 JSON to the Python AI server, enforces per-user monthly quotas (stored in `usage_quotas` with composite PK `user_id + month`), and records usage only on successful inference.
+The backend forwards images as base64 JSON to the Python AI server, enforces per-user monthly quotas (stored in `usage_quotas` with composite PK `user_id + month`), and records usage only on successful inference. Usage is recorded before streaming the result back — a cancelled download still consumes quota.
 
 ### Auth
 
-Session-based: login sets an HTTP-only cookie (`SameSite=None; Secure` for cross-origin HTTPS, `SameSite=Lax` for local HTTP). Sessions expire after 7 days. Each protected endpoint calls `getSessionUser()`.
+Session-based: login sets an HTTP-only cookie (`SameSite=None; Secure` for cross-origin HTTPS, `SameSite=Lax` for local HTTP). Sessions expire after 7 days. Each protected endpoint calls `getSessionUser()`. Passwords are hashed with PBKDF2-SHA256 (100k iterations) via the Web Crypto API — not bcrypt.
+
+The Hono RPC client (`src/lib/hc.ts`) must be initialized with `credentials: 'include'` so the browser sends the session cookie on cross-origin requests in production.
+
+### Quota limits
+
+- `free` plan: 50 requests/month
+- `pro` plan: 1000 requests/month
+
+Month is tracked as a `YYYY-MM` string (UTC). Rows in `usage_quotas` are created on first use each month; no manual reset is needed.
+
+### HEIC image handling
+
+MIME type for HEIC files is unreliable on Windows and some drag-and-drop scenarios. `src/lib/imageFile.ts` detects HEIC by both `file.type` and filename extension, then converts client-side to JPEG (quality 0.92) via `heic2any` before upload.
+
+### AI server constraints
+
+The FastAPI server (`ai-server/`) holds job state (queues, buffers, progress) in process memory keyed by `jobId`. Jobs expire after 5 minutes if unclaimed. This means **the AI server cannot be horizontally scaled** without adding external state (Redis, Durable Objects, etc.).
 
 ### Deployment targets
 
