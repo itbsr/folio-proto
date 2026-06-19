@@ -101,6 +101,121 @@ graph LR
     style AIServer fill:#f3e5f5,stroke:#7B1FA2
 ```
 
+## ユースケース図
+
+```mermaid
+graph TB
+    %% アクター定義
+    GuestActor["👤 ゲスト\n(未認証ユーザー)"]
+    FreeActor["👤 Freeユーザー\n(認証済み)"]
+    ProActor["👤 Proユーザー\n(認証済み)"]
+    AIActor["🤖 AIサーバー\n(外部システム)"]
+
+    subgraph System["folio-proto システム境界"]
+        subgraph AuthUC["認証"]
+            UC1("新規登録")
+            UC2("ログイン")
+            UC3("ログアウト")
+        end
+
+        subgraph ImageUC["画像処理"]
+            UC4("画像をアップロード")
+            UC5("文書補正を実行")
+            UC6("処理進捗を確認")
+            UC7("Before/After を比較")
+            UC8("補正済み画像をダウンロード")
+        end
+
+        subgraph ManageUC["利用管理"]
+            UC9("使用量・クォータを確認")
+            UC10("処理履歴を確認")
+        end
+
+        subgraph InternalUC["システム内部処理"]
+            UC11(["クォータ上限チェック"])
+            UC12(["セッション検証"])
+            UC13(["DewarpNet 推論\n(WC + BM 2段階)"])
+            UC14(["SSEストリームで進捗配信"])
+        end
+    end
+
+    %% ゲストのユースケース
+    GuestActor --> UC1
+    GuestActor --> UC2
+
+    %% Freeユーザー (月50回まで)
+    FreeActor --> UC3
+    FreeActor --> UC4
+    FreeActor --> UC5
+    FreeActor --> UC6
+    FreeActor --> UC7
+    FreeActor --> UC8
+    FreeActor --> UC9
+    FreeActor --> UC10
+
+    %% Proユーザー (Freeを継承 + 月1000回)
+    ProActor --> UC3
+    ProActor --> UC4
+    ProActor --> UC5
+    ProActor --> UC6
+    ProActor --> UC7
+    ProActor --> UC8
+    ProActor --> UC9
+    ProActor --> UC10
+
+    %% AIサーバーのユースケース
+    AIActor --> UC13
+    AIActor --> UC14
+
+    %% include 関係 (点線)
+    UC5 -.->|"«include»"| UC11
+    UC5 -.->|"«include»"| UC12
+    UC5 -.->|"«include»"| UC13
+    UC6 -.->|"«include»"| UC14
+    UC4 -.->|"«include»"| UC12
+
+    %% スタイル
+    style System fill:#fafafa,stroke:#546E7A,stroke-width:2px
+    style AuthUC fill:#e3f2fd,stroke:#1976D2
+    style ImageUC fill:#e8f5e9,stroke:#388E3C
+    style ManageUC fill:#fff3e0,stroke:#F57C00
+    style InternalUC fill:#f3e5f5,stroke:#7B1FA2,stroke-dasharray:4 4
+
+    style GuestActor fill:#eceff1,stroke:#607D8B
+    style FreeActor fill:#e1f5fe,stroke:#0288D1
+    style ProActor fill:#ffe0b2,stroke:#E65100
+    style AIActor fill:#ede7f6,stroke:#512DA8
+
+    style UC11 fill:#f3e5f5,stroke:#9C27B0
+    style UC12 fill:#f3e5f5,stroke:#9C27B0
+    style UC13 fill:#f3e5f5,stroke:#9C27B0
+    style UC14 fill:#f3e5f5,stroke:#9C27B0
+```
+
+**アクター説明:**
+
+| アクター | 説明 | 月間処理上限 |
+|---|---|---|
+| ゲスト | 未認証ユーザー。登録・ログインのみ可能 | ― |
+| Freeユーザー | 無料プラン。基本機能を利用可能 | 50回 |
+| Proユーザー | 有料プラン。Freeと同じ機能、上限が大幅拡大 | 1,000回 |
+| AIサーバー | DewarpNet推論を担う外部システム | ― |
+
+**ユースケース説明:**
+
+| ユースケース | 説明 |
+|---|---|
+| 新規登録 | メール・パスワードでアカウント作成 (デフォルト: Freeプラン) |
+| ログイン | HTTP-only Cookieによるセッション開始 (7日間有効) |
+| ログアウト | セッション破棄 |
+| 画像をアップロード | JPEG / PNG / HEIC 形式に対応。HEIC は自動変換 |
+| 文書補正を実行 | アップロード画像をDewarpNetで補正。クォータ・セッション確認を含む |
+| 処理進捗を確認 | SSEストリームで 0%→50%→100% の進捗をリアルタイム受信 |
+| Before/After を比較 | スライダーUIで補正前後を並べて確認 |
+| 補正済み画像をダウンロード | 補正済みJPEG画像を端末に保存 |
+| 使用量・クォータを確認 | 当月の処理回数・残り回数・プラン上限を表示 |
+| 処理履歴を確認 | 直近20件の処理結果 (成功/失敗) を一覧表示 |
+
 ## 認証フロー
 
 ```mermaid
