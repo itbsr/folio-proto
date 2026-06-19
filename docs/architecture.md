@@ -104,12 +104,11 @@ graph LR
 ## ユースケース図
 
 ```mermaid
-graph TB
-    %% アクター定義
-    GuestActor["👤 ゲスト\n(未認証ユーザー)"]
-    FreeActor["👤 Freeユーザー\n(認証済み)"]
-    ProActor["👤 Proユーザー\n(認証済み)"]
-    AIActor["🤖 AIサーバー\n(外部システム)"]
+graph LR
+    %% 左側アクター
+    GuestActor["👤 ゲスト<br/>(未認証ユーザー)"]
+    FreeActor["👤 Freeユーザー<br/>(認証済み・月50回)"]
+    ProActor["👤 Proユーザー<br/>(認証済み・月1,000回)"]
 
     subgraph System["folio-proto システム境界"]
         subgraph AuthUC["認証"]
@@ -134,16 +133,19 @@ graph TB
         subgraph InternalUC["システム内部処理"]
             UC11(["クォータ上限チェック"])
             UC12(["セッション検証"])
-            UC13(["DewarpNet 推論\n(WC + BM 2段階)"])
+            UC13(["DewarpNet 推論<br/>(WC + BM 2段階)"])
             UC14(["SSEストリームで進捗配信"])
         end
     end
 
-    %% ゲストのユースケース
+    %% 右側アクター
+    AIActor["🤖 AIサーバー<br/>(外部システム)"]
+
+    %% ゲスト → ユースケース
     GuestActor --> UC1
     GuestActor --> UC2
 
-    %% Freeユーザー (月50回まで)
+    %% Freeユーザー → ユースケース
     FreeActor --> UC3
     FreeActor --> UC4
     FreeActor --> UC5
@@ -153,7 +155,7 @@ graph TB
     FreeActor --> UC9
     FreeActor --> UC10
 
-    %% Proユーザー (Freeを継承 + 月1000回)
+    %% Proユーザー → ユースケース
     ProActor --> UC3
     ProActor --> UC4
     ProActor --> UC5
@@ -163,18 +165,17 @@ graph TB
     ProActor --> UC9
     ProActor --> UC10
 
-    %% AIサーバーのユースケース
-    AIActor --> UC13
-    AIActor --> UC14
+    %% AIサーバー → ユースケース
+    UC13 --> AIActor
+    UC14 --> AIActor
 
-    %% include 関係 (点線)
+    %% «include» 関係
+    UC4 -.->|"«include»"| UC12
     UC5 -.->|"«include»"| UC11
     UC5 -.->|"«include»"| UC12
     UC5 -.->|"«include»"| UC13
     UC6 -.->|"«include»"| UC14
-    UC4 -.->|"«include»"| UC12
 
-    %% スタイル
     style System fill:#fafafa,stroke:#546E7A,stroke-width:2px
     style AuthUC fill:#e3f2fd,stroke:#1976D2
     style ImageUC fill:#e8f5e9,stroke:#388E3C
