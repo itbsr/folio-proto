@@ -1516,7 +1516,7 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
         </div>
         <div className="row" style={{ gap: 8 }}>
           <JobSwitcher viewIdx={viewIdx} totalJobs={totalJobs} onViewChange={onViewChange} lang={lang} />
-          {(['png', 'pdf', 'jpg'] as const).map((f) => (
+          {(['pdf', 'png', 'jpg'] as const).map((f) => (
             <button key={f} className={'tag' + (format === f ? ' solid' : '')} style={{ cursor: 'pointer' }} onClick={() => setFormat(f)}>
               {f.toUpperCase()}
             </button>
@@ -1560,7 +1560,7 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
           <div className="card">
             <div className="label" style={{ marginBottom: 8 }}>{jp ? 'フォーマット' : 'FORMAT'}</div>
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-              {(['png', 'pdf', 'jpg'] as const).map((f) => (
+              {(['pdf', 'png', 'jpg'] as const).map((f) => (
                 <button key={f} className={'tag' + (format === f ? ' solid' : '')} style={{ cursor: 'pointer' }} onClick={() => setFormat(f)}>{f.toUpperCase()}</button>
               ))}
             </div>
