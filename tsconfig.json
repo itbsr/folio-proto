@@ -16,5 +16,5 @@
       "@my-app/backend/*": ["./packages/backend/src/*"]
     }
   },
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "packages/backend/test"]
 }

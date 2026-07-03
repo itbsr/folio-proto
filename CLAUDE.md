@@ -16,6 +16,9 @@ npm run dev:frontend   # Vite frontend dev server
 npm run build          # Build all workspaces
 npm run typecheck      # TypeScript type check (no emit)
 
+# Tests (Vitest workspace: shared runs in node, backend in workerd with Miniflare D1)
+npm test               # Run all workspace tests
+
 # Backend only
 npm run deploy --workspace=@my-app/backend   # Deploy to Cloudflare Workers
 

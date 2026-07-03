@@ -8,6 +8,10 @@
     "dev:backend": "npm run dev --workspace=@my-app/backend",
     "dev:frontend": "npm run dev --workspace=@my-app/frontend",
     "build": "npm run build --workspaces",
-    "typecheck": "tsc --noEmit"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p packages/backend/test"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.6"
   }
 }
