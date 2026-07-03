@@ -1450,13 +1450,17 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
   const baseName = fileName
     ? fileName.replace(/\.[^/.]+$/, '')
     : `folio-${new Date().toISOString().slice(0, 10)}`;
+  const hasMultiple = (allJobs?.length ?? 0) > 1;
+  const pdfAllFilename = `folio-corrected-${new Date().toISOString().slice(0, 10)}.pdf`;
+  const displayFilename = format === 'pdf' && hasMultiple ? pdfAllFilename : `${baseName}-corrected.${format}`;
 
   const runExport = async () => {
     if (!resultImage) return;
     setExporting(true);
     try {
       const work = format === 'pdf'
-        ? buildPdfFromPngImages([resultImage]).then((bytes) => downloadBlob(bytes, `${baseName}-corrected.pdf`, 'application/pdf'))
+        ? buildPdfFromPngImages(hasMultiple ? allJobs!.map((j) => j.resultImage) : [resultImage])
+            .then((bytes) => downloadBlob(bytes, displayFilename, 'application/pdf'))
         : Promise.resolve().then(() => {
             const a = document.createElement('a');
             a.href = `data:image/png;base64,${resultImage}`;
@@ -1532,7 +1536,7 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
             <div style={{ marginTop: 16, padding: '14px 18px', background: 'var(--ink)', color: 'var(--bg)', display: 'flex', alignItems: 'center', gap: 12 }}>
               <span style={{ color: 'var(--accent)', fontSize: 18 }}>✓</span>
               <span className="mono" style={{ fontSize: 12, letterSpacing: '0.1em' }}>
-                {jp ? '保存しました' : 'SAVED'} — {baseName}-corrected.{format}
+                {jp ? '保存しました' : 'SAVED'} — {displayFilename}
               </span>
             </div>
           )}
@@ -1543,7 +1547,7 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
           <div className="card">
             <div className="label" style={{ marginBottom: 8 }}>{jp ? 'ファイル名' : 'FILENAME'}</div>
             <div className="mono" style={{ fontSize: 13, padding: '8px 10px', border: '1px dashed var(--rule-strong)' }}>
-              {baseName}-corrected.{format}
+              {displayFilename}
             </div>
           </div>
           <div className="card">
@@ -1559,17 +1563,21 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
               <span className="mono" style={{ fontSize: 12, color: 'var(--accent)' }}>≈ 2.4 MB</span>
             </div>
           </div>
-          {allJobs && allJobs.length > 1 && (
+          {format === 'png' && hasMultiple && (
             <button className="btn accent lg full" onClick={downloadAll} disabled={downloadingAll} style={{ justifyContent: 'center' }}>
               {downloadingAll
                 ? (jp ? '★ 準備中…' : '★ Preparing…')
                 : allDone
-                  ? (jp ? `✓ ${allJobs.length}枚を保存しました` : `✓ Saved ${allJobs.length} files`)
-                  : (jp ? `すべてダウンロード (${allJobs.length}枚)` : `Download All (${allJobs.length} files) →`)}
+                  ? (jp ? `✓ ${allJobs!.length}枚を保存しました` : `✓ Saved ${allJobs!.length} files`)
+                  : (jp ? `すべてダウンロード (${allJobs!.length}枚)` : `Download All (${allJobs!.length} files) →`)}
             </button>
           )}
           <button className="btn accent lg full" onClick={runExport} disabled={exporting || !resultImage} style={{ justifyContent: 'center' }}>
-            {exporting ? (jp ? '★ 処理中…' : '★ Saving…') : done ? (jp ? '✓ 保存しました' : '✓ Saved') : (<>{jp ? 'ダウンロード' : 'Download'} <span className="arrow">→</span></>)}
+            {exporting
+              ? (jp ? '★ 処理中…' : '★ Saving…')
+              : done
+                ? (jp ? '✓ 保存しました' : '✓ Saved')
+                : (<>{format === 'pdf' && hasMultiple ? (jp ? `全${allJobs!.length}ページをダウンロード` : `Download all ${allJobs!.length} pages`) : (jp ? 'このページをダウンロード' : 'Download this page')} <span className="arrow">→</span></>)}
           </button>
           {!resultImage && (
             <p className="serif italic" style={{ margin: 0, fontSize: 14, color: 'var(--mute)', textAlign: 'center' }}>
