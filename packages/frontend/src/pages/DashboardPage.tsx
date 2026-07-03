@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import client, { API_BASE } from '../lib/hc';
 import { fileToBase64, isAcceptableImage, IMAGE_ACCEPT } from '../lib/imageFile';
+import { buildPdfFromPngImages, downloadBlob } from '../lib/exportPdf';
 import type { UsageInfo, HistoryItem } from '@my-app/shared';
 
 // ─────────────────────────────────────────────
@@ -1440,11 +1441,9 @@ function ScreenFilter({ lang, go, resultImage, viewIdx, totalJobs, onViewChange 
 // ─────────────────────────────────────────────
 function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onViewChange, allJobs }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null; fileName?: string | null; viewIdx: number; totalJobs: number; onViewChange: (idx: number) => void; allJobs?: Array<{ resultImage: string; fileName: string }>; }) {
   const jp = lang === 'jp';
-  const format = 'png' as const;
+  const [format, setFormat] = useState<'png' | 'pdf'>('png');
   const [exporting, setExporting] = useState(false);
   const [done, setDone] = useState(false);
-  const [pdfHoveredHeader, setPdfHoveredHeader] = useState(false);
-  const [pdfHoveredCard, setPdfHoveredCard] = useState(false);
   const [downloadingAll, setDownloadingAll] = useState(false);
   const [allDone, setAllDone] = useState(false);
 
@@ -1452,36 +1451,43 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
     ? fileName.replace(/\.[^/.]+$/, '')
     : `folio-${new Date().toISOString().slice(0, 10)}`;
 
-  const runExport = () => {
+  const runExport = async () => {
     if (!resultImage) return;
     setExporting(true);
-    setTimeout(() => {
-      const a = document.createElement('a');
-      a.href = `data:image/${format};base64,${resultImage}`;
-      a.download = `${baseName}-corrected.${format}`;
-      a.click();
-      setExporting(false);
+    try {
+      const work = format === 'pdf'
+        ? buildPdfFromPngImages([resultImage]).then((bytes) => downloadBlob(bytes, `${baseName}-corrected.pdf`, 'application/pdf'))
+        : Promise.resolve().then(() => {
+            const a = document.createElement('a');
+            a.href = `data:image/png;base64,${resultImage}`;
+            a.download = `${baseName}-corrected.png`;
+            a.click();
+          });
+      await Promise.all([work, new Promise((r) => setTimeout(r, 600))]);
       setDone(true);
-    }, 600);
+    } finally {
+      setExporting(false);
+    }
   };
 
   const downloadAll = async () => {
     if (!allJobs || allJobs.length < 2) return;
     setDownloadingAll(true);
     try {
-      const JSZip = (await import('jszip')).default;
-      const zip = new JSZip();
-      for (const job of allJobs) {
-        const base = job.fileName.replace(/\.[^/.]+$/, '');
-        zip.file(`${base}-corrected.${format}`, job.resultImage, { base64: true });
+      const today = new Date().toISOString().slice(0, 10);
+      if (format === 'pdf') {
+        const bytes = await buildPdfFromPngImages(allJobs.map((j) => j.resultImage));
+        downloadBlob(bytes, `folio-corrected-${today}.pdf`, 'application/pdf');
+      } else {
+        const JSZip = (await import('jszip')).default;
+        const zip = new JSZip();
+        for (const job of allJobs) {
+          const base = job.fileName.replace(/\.[^/.]+$/, '');
+          zip.file(`${base}-corrected.png`, job.resultImage, { base64: true });
+        }
+        const blob = await zip.generateAsync({ type: 'blob' });
+        downloadBlob(blob, `folio-corrected-${today}.zip`);
       }
-      const blob = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `folio-corrected-${new Date().toISOString().slice(0, 10)}.zip`;
-      a.click();
-      URL.revokeObjectURL(url);
       setAllDone(true);
     } finally {
       setDownloadingAll(false);
@@ -1499,19 +1505,11 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
         </div>
         <div className="row" style={{ gap: 8 }}>
           <JobSwitcher viewIdx={viewIdx} totalJobs={totalJobs} onViewChange={onViewChange} lang={lang} />
-          <button className="tag solid" style={{ cursor: 'pointer' }}>PNG</button>
-          <span
-            style={{ position: 'relative', display: 'inline-block' }}
-            onMouseEnter={() => setPdfHoveredHeader(true)}
-            onMouseLeave={() => setPdfHoveredHeader(false)}
-          >
-            <button className="tag" disabled style={{ opacity: 0.4, cursor: 'not-allowed' }}>PDF</button>
-            {pdfHoveredHeader && (
-              <span style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: '50%', transform: 'translateX(-50%)', padding: '4px 8px', background: 'var(--ink)', color: 'var(--bg)', fontSize: 11, whiteSpace: 'nowrap', pointerEvents: 'none', letterSpacing: '0.06em' }}>
-                {jp ? '未実装' : 'Coming soon'}
-              </span>
-            )}
-          </span>
+          {(['png', 'pdf'] as const).map((f) => (
+            <button key={f} className={'tag' + (format === f ? ' solid' : '')} style={{ cursor: 'pointer' }} onClick={() => setFormat(f)}>
+              {f.toUpperCase()}
+            </button>
+          ))}
         </div>
       </div>
       <div className="rule-thick" />
@@ -1551,19 +1549,9 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
           <div className="card">
             <div className="label" style={{ marginBottom: 8 }}>{jp ? 'フォーマット' : 'FORMAT'}</div>
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-              <button className="tag solid" style={{ cursor: 'pointer' }}>PNG</button>
-              <span
-                style={{ position: 'relative', display: 'inline-block' }}
-                onMouseEnter={() => setPdfHoveredCard(true)}
-                onMouseLeave={() => setPdfHoveredCard(false)}
-              >
-                <button className="tag" disabled style={{ opacity: 0.4, cursor: 'not-allowed' }}>PDF</button>
-                {pdfHoveredCard && (
-                  <span style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: '50%', transform: 'translateX(-50%)', padding: '4px 8px', background: 'var(--ink)', color: 'var(--bg)', fontSize: 11, whiteSpace: 'nowrap', pointerEvents: 'none', letterSpacing: '0.06em' }}>
-                    {jp ? '未実装' : 'Coming soon'}
-                  </span>
-                )}
-              </span>
+              {(['png', 'pdf'] as const).map((f) => (
+                <button key={f} className={'tag' + (format === f ? ' solid' : '')} style={{ cursor: 'pointer' }} onClick={() => setFormat(f)}>{f.toUpperCase()}</button>
+              ))}
             </div>
             <div className="rule" style={{ margin: '12px 0' }} />
             <div className="row between">
