@@ -126,14 +126,14 @@ The FastAPI server (`ai-server/`) holds job state (queues, buffers, progress) in
 
 ### Planning
 
-- For tasks with 3+ steps, multiple file changes, or architectural decisions, create a checklist in `tasks/todo.md` before starting.
-- Include verification steps (lint/typecheck/build/manual check) in the plan from the start.
+- For tasks with 3+ steps, multiple file changes, or architectural decisions, define a todo list with the built-in task tool before starting.
+- Include verification steps (lint/typecheck/build/manual check) in the todo list from the start.
 - If requirements are ambiguous, write out explicit input/output/edge-case specs first.
 
-### Task management (`tasks/todo.md`)
+### Task management
 
 - Keep exactly one item "in progress" at a time.
-- Include acceptance criteria and a short "Results" section (what changed, where, how verified).
+- Give each item clear acceptance criteria; report what changed, where, and how it was verified to the user when done (see Definition of Done) rather than in a committed file.
 - After fixes or postmortems, append a new entry to `tasks/lessons.md`: failure mode, detection signal, prevention rule.
 - Review `tasks/lessons.md` at session start and before large refactors.
 
