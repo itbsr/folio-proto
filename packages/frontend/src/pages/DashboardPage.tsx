@@ -806,16 +806,22 @@ function ScreenProcessing({ lang, go, job, jobIndex, totalJobs, queueSummary, on
   const estimated = pct > 0 ? (elapsed / pct) * 100 : 0;
   const left = Math.max(0, estimated - elapsed).toFixed(1);
 
+  // 本番では Cloudflare エッジがリクエストボディを全量バッファしてから Worker へ
+  // 転送するため、② の `received` はアップロード完了後にまとめて届く（バイト単位の
+  // 到着進捗は経路上観測できない — issue #21）。未着の間は 0% で凍結させず
+  // 「転送中」の不確定表示にする。`received` が届き次第、実測値に切り替わる。
+  const arrivalIndeterminate = aiArrivalPct === 0 && edgePct > 0 && !error;
+
   // 各エリア（アップロード / 推論 / ダウンロード）に「送信済み」「到着」の2本をまとめる。
   const groups: {
     id: string; en: string; jp: string; hint?: string;
-    bars: { id: string; en: string; jp: string; pct: number }[];
+    bars: { id: string; en: string; jp: string; pct: number; indeterminate?: boolean }[];
   }[] = [
     {
       id: 'upload', en: 'UPLOAD', jp: 'アップロード',
       bars: [
         { id: 'ul-sent', en: 'SENT', jp: '送信済み', pct: edgePct },        // ① 端末が送出
-        { id: 'ul-arrived', en: 'AT SERVER', jp: 'サーバへ到着', pct: aiArrivalPct }, // ② 推論サーバが受信
+        { id: 'ul-arrived', en: 'AT SERVER', jp: 'サーバへ到着', pct: aiArrivalPct, indeterminate: arrivalIndeterminate }, // ② 推論サーバが受信
       ],
     },
     {
@@ -929,7 +935,7 @@ function ScreenProcessing({ lang, go, job, jobIndex, totalJobs, queueSummary, on
 
             {/* Grouped areas: UPLOAD (2 bars) · INFERENCE · DOWNLOAD (2 bars) */}
             {groups.map((group, gi) => {
-              const groupActive = group.bars.some((b) => b.pct > 0 && b.pct < 100);
+              const groupActive = group.bars.some((b) => (b.pct > 0 && b.pct < 100) || (b.indeterminate && b.pct < 100));
               const groupDone = group.bars.every((b) => b.pct >= 100);
               return (
                 <div
@@ -954,8 +960,10 @@ function ScreenProcessing({ lang, go, job, jobIndex, totalJobs, queueSummary, on
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '0 16px 18px' }}>
                     {group.bars.map((bar) => {
                       const complete = bar.pct >= 100;
-                      const active = bar.pct > 0 && bar.pct < 100;
-                      const pending = bar.pct === 0;
+                      // 不確定表示: 進行中だが % を観測できない区間（経路上のバッファリング等）。
+                      const indeterminate = !complete && !!bar.indeterminate;
+                      const active = indeterminate || (bar.pct > 0 && bar.pct < 100);
+                      const pending = !active && !complete;
                       return (
                         <div key={bar.id}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 7 }}>
@@ -965,21 +973,25 @@ function ScreenProcessing({ lang, go, job, jobIndex, totalJobs, queueSummary, on
                               {pending && '○ '}
                               {jp ? bar.jp : bar.en}
                             </span>
-                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 500, lineHeight: 1, fontFeatureSettings: "'tnum'", letterSpacing: '-0.01em', color: complete ? 'var(--accent)' : pending ? 'var(--rule-strong)' : 'var(--ink)', transition: 'color 0.3s' }}>
-                              {complete ? (jp ? '完了' : 'DONE') : `${String(bar.pct).padStart(2, '0')}%`}
+                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: indeterminate ? 11 : 18, fontWeight: 500, lineHeight: 1, fontFeatureSettings: "'tnum'", letterSpacing: indeterminate ? '0.08em' : '-0.01em', color: complete ? 'var(--accent)' : pending ? 'var(--rule-strong)' : 'var(--ink)', transition: 'color 0.3s' }}>
+                              {complete ? (jp ? '完了' : 'DONE')
+                                : indeterminate ? (jp ? '転送中' : 'IN TRANSIT')
+                                : `${String(bar.pct).padStart(2, '0')}%`}
                             </span>
                           </div>
                           <div style={{ position: 'relative', height: 8, borderRadius: 99, background: 'color-mix(in oklab, var(--ink) 12%, transparent)', boxShadow: 'inset 0 1px 1px rgba(0,0,0,0.08)' }}>
                             <div style={{
                               position: 'absolute', left: 0, top: 0, height: '100%',
-                              width: bar.pct > 0 ? `max(${bar.pct}%, 7px)` : '0%',
+                              width: indeterminate ? '100%' : bar.pct > 0 ? `max(${bar.pct}%, 7px)` : '0%',
                               borderRadius: 99,
-                              background: active
+                              background: indeterminate
+                                ? 'linear-gradient(90deg, transparent 25%, color-mix(in srgb, var(--accent) 55%, transparent) 50%, transparent 75%)'
+                                : active
                                 ? 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 65%, transparent), var(--accent))'
                                 : 'var(--accent)',
                               backgroundSize: active ? '200% 100%' : '100% 100%',
                               animation: active ? 'barShimmer 1.6s linear infinite' : 'none',
-                              boxShadow: active ? '0 0 8px color-mix(in srgb, var(--accent) 55%, transparent)' : 'none',
+                              boxShadow: active && !indeterminate ? '0 0 8px color-mix(in srgb, var(--accent) 55%, transparent)' : 'none',
                               transition: 'width 0.15s ease-out',
                             }} />
                           </div>

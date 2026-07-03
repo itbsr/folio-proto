@@ -164,6 +164,7 @@ make clean     # イメージ削除
 ## 制約・注意点
 
 - **AI サーバーは水平スケール不可。** ジョブ状態（キュー・バッファ・進捗）をプロセスメモリに `jobId` で保持しており、未取得ジョブは5分で失効します。スケールさせるには Redis や Durable Objects などの外部状態が必要です。
+- **本番（Cloudflare 経由）ではアップロードの「サーバへ到着」をバイト単位で追跡できない。** Cloudflare エッジはデフォルトでリクエストボディを全量バッファしてから Worker へ転送するため、AI サーバーの受信進捗（SSE `received`）はアップロード完了後にまとめて届きます（[#21](https://github.com/itbsr/folio-proto/issues/21)）。UI ではこの間を「転送中」の不確定表示にしています。該当ルートに Cloudflare Configuration Rules の Request body buffering「None」を設定するとローカル同様バイト進捗が流れます（WAF のボディ検査が無効になるトレードオフあり）。
 - 画像の永続保存は未実装（保存方針は検討中）。
 - 新機能の開発は必ず `shared のスキーマ定義 → D1 マイグレーション → バックエンド → フロントエンド` の順で行います。詳細な開発規約は [CLAUDE.md](./CLAUDE.md) を参照してください。
 
