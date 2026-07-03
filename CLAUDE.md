@@ -143,6 +143,19 @@ A task is complete only when:
 1. Behavior matches acceptance criteria.
 2. Relevant tests/lint/typecheck/build pass (or skipped with documented reason).
 3. A short verification story exists: what changed and how it was confirmed.
+4. README.md is updated if the change affects it (see Documentation).
+
+### Documentation
+
+When a change alters anything documented in README.md, update README.md in the same branch/PR. This includes:
+
+- Commands, setup, or startup steps (`package.json` scripts, `Makefile` targets)
+- API endpoints (paths, methods, behavior)
+- Environment variables or secrets
+- Architecture, tech stack, or dependencies with user-facing impact
+- Quota limits, deployment steps, or known constraints
+
+Purely internal refactors that don't change any documented behavior do not require a README update.
 
 ### Error recovery
 
