@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import client, { API_BASE } from '../lib/hc';
 import { fileToBase64, isAcceptableImage, IMAGE_ACCEPT } from '../lib/imageFile';
 import { buildPdfFromPngImages, downloadBlob } from '../lib/exportPdf';
+import { convertPngBase64ToJpegBlob } from '../lib/exportJpg';
 import type { UsageInfo, HistoryItem } from '@my-app/shared';
 
 // ─────────────────────────────────────────────
@@ -1441,7 +1442,7 @@ function ScreenFilter({ lang, go, resultImage, viewIdx, totalJobs, onViewChange 
 // ─────────────────────────────────────────────
 function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onViewChange, allJobs }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null; fileName?: string | null; viewIdx: number; totalJobs: number; onViewChange: (idx: number) => void; allJobs?: Array<{ resultImage: string; fileName: string }>; }) {
   const jp = lang === 'jp';
-  const [format, setFormat] = useState<'png' | 'pdf'>('pdf');
+  const [format, setFormat] = useState<'png' | 'pdf' | 'jpg'>('pdf');
   const [exporting, setExporting] = useState(false);
   const [done, setDone] = useState(false);
   const [downloadingAll, setDownloadingAll] = useState(false);
@@ -1461,6 +1462,8 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
       const work = format === 'pdf'
         ? buildPdfFromPngImages(hasMultiple ? allJobs!.map((j) => j.resultImage) : [resultImage])
             .then((bytes) => downloadBlob(bytes, displayFilename, 'application/pdf'))
+        : format === 'jpg'
+        ? convertPngBase64ToJpegBlob(resultImage).then((blob) => downloadBlob(blob, `${baseName}-corrected.jpg`, 'image/jpeg'))
         : Promise.resolve().then(() => {
             const a = document.createElement('a');
             a.href = `data:image/png;base64,${resultImage}`;
@@ -1487,7 +1490,11 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
         const zip = new JSZip();
         for (const job of allJobs) {
           const base = job.fileName.replace(/\.[^/.]+$/, '');
-          zip.file(`${base}-corrected.png`, job.resultImage, { base64: true });
+          if (format === 'jpg') {
+            zip.file(`${base}-corrected.jpg`, await convertPngBase64ToJpegBlob(job.resultImage));
+          } else {
+            zip.file(`${base}-corrected.png`, job.resultImage, { base64: true });
+          }
         }
         const blob = await zip.generateAsync({ type: 'blob' });
         downloadBlob(blob, `folio-corrected-${today}.zip`);
@@ -1509,7 +1516,7 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
         </div>
         <div className="row" style={{ gap: 8 }}>
           <JobSwitcher viewIdx={viewIdx} totalJobs={totalJobs} onViewChange={onViewChange} lang={lang} />
-          {(['png', 'pdf'] as const).map((f) => (
+          {(['png', 'pdf', 'jpg'] as const).map((f) => (
             <button key={f} className={'tag' + (format === f ? ' solid' : '')} style={{ cursor: 'pointer' }} onClick={() => setFormat(f)}>
               {f.toUpperCase()}
             </button>
@@ -1553,7 +1560,7 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
           <div className="card">
             <div className="label" style={{ marginBottom: 8 }}>{jp ? 'フォーマット' : 'FORMAT'}</div>
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-              {(['png', 'pdf'] as const).map((f) => (
+              {(['png', 'pdf', 'jpg'] as const).map((f) => (
                 <button key={f} className={'tag' + (format === f ? ' solid' : '')} style={{ cursor: 'pointer' }} onClick={() => setFormat(f)}>{f.toUpperCase()}</button>
               ))}
             </div>
@@ -1563,7 +1570,7 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
               <span className="mono" style={{ fontSize: 12, color: 'var(--accent)' }}>≈ 2.4 MB</span>
             </div>
           </div>
-          {format === 'png' && hasMultiple && (
+          {format !== 'pdf' && hasMultiple && (
             <button className="btn accent lg full" onClick={downloadAll} disabled={downloadingAll} style={{ justifyContent: 'center' }}>
               {downloadingAll
                 ? (jp ? '★ 準備中…' : '★ Preparing…')
