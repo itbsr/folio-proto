@@ -684,7 +684,6 @@ function ScreenProcessing({ lang, go, job, jobIndex, totalJobs, queueSummary, on
   const [resultSentPct, setResultSentPct] = useState(0); // ③' 下り送信  (SSE result_sent)
   const [downloadPct, setDownloadPct] = useState(0);     // ④ 下り受信   (XHR onprogress)
   const startTime = useRef(Date.now());
-  const hasStarted = useRef(false);
 
   const phaseLogs = ['DECODE / PREPROCESS', 'WC MODEL INFERENCE', 'BM MODEL INFERENCE', 'UNWARP / ENCODE'];
 
@@ -696,8 +695,7 @@ function ScreenProcessing({ lang, go, job, jobIndex, totalJobs, queueSummary, on
   };
 
   useEffect(() => {
-    if (!inputImage || hasStarted.current) return;
-    hasStarted.current = true;
+    if (!inputImage) return;
 
     const jobId = crypto.randomUUID();
     let settled = false;
