@@ -1738,9 +1738,16 @@ export function DashboardPage() {
     })();
   }, []);
 
-  // Keyboard nav 1-9
+  // Keyboard nav 1-9 — inactive while typing in a field or holding a modifier
+  // (switching screens mid-processing aborts the in-flight job; see issue #32)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target;
+      if (
+        t instanceof HTMLElement &&
+        (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)
+      ) return;
       const idx = parseInt(e.key, 10);
       if (idx >= 1 && idx <= NAV_ITEMS.length) {
         setActive(NAV_ITEMS[idx - 1].id);
