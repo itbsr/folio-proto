@@ -8,3 +8,6 @@ tmp
 
 .tmp/
 ai-server/.env
+
+# Ephemeral working notes — use the built-in task tool instead (see CLAUDE.md)
+tasks/todo.md
