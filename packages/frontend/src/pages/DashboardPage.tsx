@@ -1441,7 +1441,7 @@ function ScreenFilter({ lang, go, resultImage, viewIdx, totalJobs, onViewChange 
 // ─────────────────────────────────────────────
 function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onViewChange, allJobs }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null; fileName?: string | null; viewIdx: number; totalJobs: number; onViewChange: (idx: number) => void; allJobs?: Array<{ resultImage: string; fileName: string }>; }) {
   const jp = lang === 'jp';
-  const [format, setFormat] = useState<'png' | 'pdf'>('png');
+  const [format, setFormat] = useState<'png' | 'pdf'>('pdf');
   const [exporting, setExporting] = useState(false);
   const [done, setDone] = useState(false);
   const [downloadingAll, setDownloadingAll] = useState(false);
