@@ -23,13 +23,46 @@ async function getSessionUser(c: Context<{ Bindings: Bindings }>) {
   ).bind(sessionId).first<{ id: string; email: string; plan: 'free' | 'pro' }>();
 }
 
-async function checkQuota(db: Bindings['DB'], userId: string, plan: string): Promise<{ ok: boolean; used: number; limit: number; month: string }> {
+// ── Quota helpers ─────────────────────────────────────────────────────────
+// Quota is enforced as an atomic reserve → refund-on-failure protocol
+// (issue #36). A single guarded UPSERT reserves a slot BEFORE the AI call,
+// so concurrent requests can never both pass a stale read-then-check. If
+// inference then fails, the reservation is refunded, preserving the rule
+// that only successful inferences consume quota.
+
+type QuotaReservation = { ok: boolean; used: number; limit: number; month: string };
+
+async function reserveQuota(db: Bindings['DB'], userId: string, plan: string): Promise<QuotaReservation> {
+  const month = new Date().toISOString().slice(0, 7);
+  const limit = PLAN_LIMITS[plan] ?? 50;
+  // Single atomic statement: the UPDATE arm only fires while count < limit,
+  // so at most `limit` reservations can succeed per month no matter how many
+  // requests race. RETURNING yields no row when the guard rejects it.
+  const row = await db.prepare(
+    `INSERT INTO usage_quotas (user_id, month, count) VALUES (?, ?, 1)
+     ON CONFLICT (user_id, month) DO UPDATE SET count = count + 1 WHERE count < ?
+     RETURNING count`
+  ).bind(userId, month, limit).first<{ count: number }>();
+  if (row) return { ok: true, used: row.count, limit, month };
+  const current = await db.prepare(
+    'SELECT count FROM usage_quotas WHERE user_id = ? AND month = ?'
+  ).bind(userId, month).first<{ count: number }>();
+  return { ok: false, used: current?.count ?? limit, limit, month };
+}
+
+function refundQuota(db: Bindings['DB'], userId: string, month: string) {
+  return db.prepare(
+    'UPDATE usage_quotas SET count = count - 1 WHERE user_id = ? AND month = ? AND count > 0'
+  ).bind(userId, month).run();
+}
+
+async function getQuotaUsage(db: Bindings['DB'], userId: string, plan: string): Promise<{ used: number; limit: number; month: string }> {
   const month = new Date().toISOString().slice(0, 7);
   const limit = PLAN_LIMITS[plan] ?? 50;
   const row = await db.prepare(
     'SELECT count FROM usage_quotas WHERE user_id = ? AND month = ?'
   ).bind(userId, month).first<{ count: number }>();
-  return { ok: (row?.count ?? 0) < limit, used: row?.count ?? 0, limit, month };
+  return { used: row?.count ?? 0, limit, month };
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────
@@ -88,7 +121,7 @@ const routes = app
   .post('/images/process', zValidator('json', processImageSchema), async (c) => {
     const user = await getSessionUser(c);
     if (!user) return c.json({ error: 'Unauthorized' }, 401);
-    const quota = await checkQuota(c.env.DB, user.id, user.plan);
+    const quota = await reserveQuota(c.env.DB, user.id, user.plan);
     if (!quota.ok) return c.json({ error: 'quota_exceeded', used: quota.used, limit: quota.limit }, 429);
 
     const { image } = c.req.valid('json');
@@ -96,30 +129,23 @@ const routes = app
     try {
       resultImage = await callDewarpNet(c.env.AI_ENDPOINT, c.env.AI_API_KEY, image);
     } catch (e) {
-      await c.env.DB.prepare('INSERT INTO usage_logs (user_id, status, error_msg) VALUES (?, ?, ?)')
-        .bind(user.id, 'error', e instanceof Error ? e.message : 'unknown').run();
+      await Promise.all([
+        refundQuota(c.env.DB, user.id, quota.month),
+        c.env.DB.prepare('INSERT INTO usage_logs (user_id, status, error_msg) VALUES (?, ?, ?)')
+          .bind(user.id, 'error', e instanceof Error ? e.message : 'unknown').run(),
+      ]);
       return c.json({ error: 'Processing failed' }, 502);
     }
 
-    await Promise.all([
-      c.env.DB.prepare('INSERT INTO usage_logs (user_id, status) VALUES (?, ?)').bind(user.id, 'success').run(),
-      c.env.DB.prepare(
-        `INSERT INTO usage_quotas (user_id, month, count) VALUES (?, ?, 1)
-         ON CONFLICT (user_id, month) DO UPDATE SET count = count + 1`
-      ).bind(user.id, quota.month).run(),
-    ]);
+    await c.env.DB.prepare('INSERT INTO usage_logs (user_id, status) VALUES (?, ?)').bind(user.id, 'success').run();
 
-    const row = await c.env.DB.prepare(
-      'SELECT count FROM usage_quotas WHERE user_id = ? AND month = ?'
-    ).bind(user.id, quota.month).first<{ count: number }>();
-
-    return c.json({ result_image: resultImage, usage: { used: row?.count ?? 1, limit: quota.limit, month: quota.month } });
+    return c.json({ result_image: resultImage, usage: { used: quota.used, limit: quota.limit, month: quota.month } });
   })
 
   .post('/images/process-stream', zValidator('json', processImageSchema), async (c) => {
     const user = await getSessionUser(c);
     if (!user) return c.json({ error: 'Unauthorized' }, 401);
-    const quota = await checkQuota(c.env.DB, user.id, user.plan);
+    const quota = await reserveQuota(c.env.DB, user.id, user.plan);
     if (!quota.ok) return c.json({ error: 'quota_exceeded', used: quota.used, limit: quota.limit }, 429);
 
     const { image } = c.req.valid('json');
@@ -128,8 +154,11 @@ const routes = app
     try {
       aiResponse = await streamDewarpNet(c.env.AI_ENDPOINT, c.env.AI_API_KEY, image);
     } catch (e) {
-      await c.env.DB.prepare('INSERT INTO usage_logs (user_id, status, error_msg) VALUES (?, ?, ?)')
-        .bind(user.id, 'error', e instanceof Error ? e.message : 'unknown').run();
+      await Promise.all([
+        refundQuota(c.env.DB, user.id, quota.month),
+        c.env.DB.prepare('INSERT INTO usage_logs (user_id, status, error_msg) VALUES (?, ?, ?)')
+          .bind(user.id, 'error', e instanceof Error ? e.message : 'unknown').run(),
+      ]);
       return c.json({ error: 'Processing failed' }, 502);
     }
 
@@ -143,9 +172,15 @@ const routes = app
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
     const writer = writable.getWriter();
 
+    const reservedUsed = quota.used;
+
     (async () => {
       const reader = aiResponse.body!.getReader();
       let buffer = '';
+      // The slot was reserved up front; it is only kept if the stream reaches
+      // a 'done' event (successful inference). Any other outcome — error
+      // event, upstream drop, client disconnect — refunds it in `finally`.
+      let completed = false;
       try {
         while (true) {
           const { done, value } = await reader.read();
@@ -162,17 +197,9 @@ const routes = app
             try { event = JSON.parse(part.slice(6).trim()); } catch { continue; }
 
             if (event.stage === 'done') {
-              await Promise.all([
-                db.prepare('INSERT INTO usage_logs (user_id, status) VALUES (?, ?)').bind(userId, 'success').run(),
-                db.prepare(
-                  `INSERT INTO usage_quotas (user_id, month, count) VALUES (?, ?, 1)
-                   ON CONFLICT (user_id, month) DO UPDATE SET count = count + 1`
-                ).bind(userId, month).run(),
-              ]);
-              const row = await db.prepare(
-                'SELECT count FROM usage_quotas WHERE user_id = ? AND month = ?'
-              ).bind(userId, month).first<{ count: number }>();
-              event.usage = { used: row?.count ?? 1, limit: planLimit, month };
+              completed = true;
+              await db.prepare('INSERT INTO usage_logs (user_id, status) VALUES (?, ?)').bind(userId, 'success').run();
+              event.usage = { used: reservedUsed, limit: planLimit, month };
             } else if (event.error) {
               await db.prepare('INSERT INTO usage_logs (user_id, status, error_msg) VALUES (?, ?, ?)')
                 .bind(userId, 'error', String(event.error)).run();
@@ -182,6 +209,7 @@ const routes = app
           }
         }
       } finally {
+        if (!completed) await refundQuota(db, userId, month).catch(() => {});
         reader.releaseLock();
         await writer.close().catch(() => {});
       }
@@ -203,8 +231,6 @@ const routes = app
   .post('/images/upload', async (c) => {
     const user = await getSessionUser(c);
     if (!user) return c.json({ error: 'Unauthorized' }, 401);
-    const quota = await checkQuota(c.env.DB, user.id, user.plan);
-    if (!quota.ok) return c.json({ error: 'quota_exceeded', used: quota.used, limit: quota.limit }, 429);
 
     const jobId = c.req.query('jobId');
     if (!jobId) return c.json({ error: 'jobId required' }, 400);
@@ -213,6 +239,9 @@ const routes = app
     const body = c.req.raw.body;
     if (!body || !total) return c.json({ error: 'empty body' }, 400);
 
+    const quota = await reserveQuota(c.env.DB, user.id, user.plan);
+    if (!quota.ok) return c.json({ error: 'quota_exceeded', used: quota.used, limit: quota.limit }, 429);
+
     let aiRes: Response;
     try {
       aiRes = await uploadToAi(
@@ -220,29 +249,27 @@ const routes = app
         c.req.header('content-type') ?? 'application/json',
       );
     } catch (e) {
-      await c.env.DB.prepare('INSERT INTO usage_logs (user_id, status, error_msg) VALUES (?, ?, ?)')
-        .bind(user.id, 'error', e instanceof Error ? e.message : 'upload failed').run();
+      await Promise.all([
+        refundQuota(c.env.DB, user.id, quota.month),
+        c.env.DB.prepare('INSERT INTO usage_logs (user_id, status, error_msg) VALUES (?, ?, ?)')
+          .bind(user.id, 'error', e instanceof Error ? e.message : 'upload failed').run(),
+      ]);
       return c.json({ error: 'Upload failed' }, 502);
     }
     if (!aiRes.ok) {
       const t = await aiRes.text().catch(() => aiRes.statusText);
-      await c.env.DB.prepare('INSERT INTO usage_logs (user_id, status, error_msg) VALUES (?, ?, ?)')
-        .bind(user.id, 'error', t.slice(0, 500)).run();
+      await Promise.all([
+        refundQuota(c.env.DB, user.id, quota.month),
+        c.env.DB.prepare('INSERT INTO usage_logs (user_id, status, error_msg) VALUES (?, ?, ?)')
+          .bind(user.id, 'error', t.slice(0, 500)).run(),
+      ]);
       return c.json({ error: 'Processing failed' }, 502);
     }
 
-    // Inference succeeded (AI is about to stream the result). Record usage now.
-    await Promise.all([
-      c.env.DB.prepare('INSERT INTO usage_logs (user_id, status) VALUES (?, ?)').bind(user.id, 'success').run(),
-      c.env.DB.prepare(
-        `INSERT INTO usage_quotas (user_id, month, count) VALUES (?, ?, 1)
-         ON CONFLICT (user_id, month) DO UPDATE SET count = count + 1`
-      ).bind(user.id, quota.month).run(),
-    ]);
-    const row = await c.env.DB.prepare(
-      'SELECT count FROM usage_quotas WHERE user_id = ? AND month = ?'
-    ).bind(user.id, quota.month).first<{ count: number }>();
-    const usage = { used: row?.count ?? 1, limit: quota.limit, month: quota.month };
+    // Inference succeeded (AI is about to stream the result). The slot
+    // reserved before the upload is kept; log the success now.
+    await c.env.DB.prepare('INSERT INTO usage_logs (user_id, status) VALUES (?, ?)').bind(user.id, 'success').run();
+    const usage = { used: quota.used, limit: quota.limit, month: quota.month };
 
     // Stream the AI's result body straight back; carry usage in a header.
     const headers = new Headers();
@@ -293,7 +320,7 @@ const routes = app
   .get('/images/usage', async (c) => {
     const user = await getSessionUser(c);
     if (!user) return c.json({ error: 'Unauthorized' }, 401);
-    const quota = await checkQuota(c.env.DB, user.id, user.plan);
+    const quota = await getQuotaUsage(c.env.DB, user.id, user.plan);
     const nextMonth = new Date();
     nextMonth.setMonth(nextMonth.getMonth() + 1, 1);
     nextMonth.setHours(0, 0, 0, 0);
