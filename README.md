@@ -31,7 +31,6 @@ npm workspaces によるモノレポ + Python 推論サーバーの構成です�
 - **React 18** + **TypeScript 5.4** + **Vite 5**
 - **react-router-dom 6** — ルーティング
 - **Hono RPC クライアント**（`hc`）— バックエンドの `AppType` を参照したエンドツーエンドの型安全な通信
-- **framer-motion** — アニメーション / **lucide-react** — アイコン
 - **heic2any** — HEIC → JPEG のクライアントサイド変換 / **jszip** — ZIP 一括ダウンロード
 - **pdf-lib** — PNG を無劣化で埋め込んだ PDF のクライアントサイド生成（ページサイズは画像の縦横比に追従、動的 import）
 - JPG 書き出しは `<canvas>` を使ったクライアントサイド再エンコード（透過部分は白背景で塗りつぶし、品質 0.92）
