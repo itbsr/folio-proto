@@ -674,7 +674,7 @@ function ScreenProcessing({ lang, go, job, jobIndex, totalJobs, queueSummary, on
   lang: Lang; go: (id: ScreenId) => void;
   job: FileJob; jobIndex: number; totalJobs: number;
   queueSummary: QueueSummaryItem[];
-  onResult: (jobId: string, result: string, usage: UsageInfo) => void;
+  onResult: (jobId: string, result: string, usage: UsageInfo | undefined) => void;
   onError: (jobId: string, msg: string) => void;
 }) {
   const inputImage = job.inputImage;
@@ -772,11 +772,18 @@ function ScreenProcessing({ lang, go, job, jobIndex, totalJobs, queueSummary, on
       if (xhr.status >= 200 && xhr.status < 300) {
         setDownloadPct(100);
         setPct(100);
+        // X-Usage is best-effort: absent/unparsable header → undefined, and the
+        // parent falls back to refetching /api/images/usage (issue #34).
         let usage: UsageInfo | undefined;
-        try { usage = JSON.parse(xhr.getResponseHeader('X-Usage') ?? 'null') ?? undefined; } catch { /* best-effort */ }
+        try {
+          const parsed: unknown = JSON.parse(xhr.getResponseHeader('X-Usage') ?? 'null');
+          if (parsed !== null && typeof parsed === 'object' && 'used' in parsed && 'limit' in parsed) {
+            usage = parsed as UsageInfo;
+          }
+        } catch { /* best-effort */ }
         finish();
         es.close();
-        onResult(job.id, xhr.responseText, usage as UsageInfo);
+        onResult(job.id, xhr.responseText, usage);
       } else {
         let msg = xhr.status === 429
           ? (jp ? '処理上限に達しました' : 'Quota exceeded')
@@ -1848,9 +1855,18 @@ export function DashboardPage() {
     });
   };
 
-  const handleJobResult = (jobId: string, result: string, newUsage: UsageInfo) => {
+  const handleJobResult = (jobId: string, result: string, newUsage: UsageInfo | undefined) => {
     patchJob(jobId, { resultImage: result, status: 'done' });
-    setUsage(newUsage);
+    if (newUsage) {
+      setUsage(newUsage);
+    } else {
+      // X-Usage header missing/unparsable (issue #34): keep the last-known
+      // usage on screen and refetch it in the background.
+      client.api.images.usage.$get().then((r) => r.json() as Promise<unknown>).then((data) => {
+        const d = data as Record<string, unknown>;
+        if ('month' in d) setUsage(d as unknown as UsageInfo);
+      }).catch(() => {});
+    }
     refreshHistory();
     advanceQueue();
   };
