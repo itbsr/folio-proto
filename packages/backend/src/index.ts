@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { zValidator } from '@hono/zod-validator';
 import { setCookie, deleteCookie, getCookie } from 'hono/cookie';
-import { registerSchema, loginSchema, processImageSchema } from '@my-app/shared';
+import { registerSchema, loginSchema, processImageSchema, jobIdSchema } from '@my-app/shared';
 import { hashPassword, verifyPassword } from './lib/crypto';
 import { callDewarpNet, streamDewarpNet, uploadToAi, aiProgressStream } from './services/ai';
 import { PLAN_LIMITS } from './lib/quota';
@@ -63,6 +63,20 @@ async function getQuotaUsage(db: Bindings['DB'], userId: string, plan: string): 
     'SELECT count FROM usage_quotas WHERE user_id = ? AND month = ?'
   ).bind(userId, month).first<{ count: number }>();
   return { used: row?.count ?? 0, limit, month };
+}
+
+// Atomically bind a jobId to the first authenticated user that touches it
+// (upload or progress — the frontend opens the progress SSE before the upload
+// XHR, so either may arrive first). Returns whether the job now belongs to
+// this user. UUID-format validation happens before this, so a foreign claim
+// can only occur if someone actually knows the 122-bit random jobId.
+async function claimJob(db: Bindings['DB'], jobId: string, userId: string): Promise<boolean> {
+  await db.prepare(
+    'INSERT INTO jobs (job_id, user_id) VALUES (?, ?) ON CONFLICT (job_id) DO NOTHING'
+  ).bind(jobId, userId).run();
+  const row = await db.prepare('SELECT user_id FROM jobs WHERE job_id = ?')
+    .bind(jobId).first<{ user_id: string }>();
+  return row?.user_id === userId;
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────
@@ -232,13 +246,22 @@ const routes = app
     const user = await getSessionUser(c);
     if (!user) return c.json({ error: 'Unauthorized' }, 401);
 
-    const jobId = c.req.query('jobId');
-    if (!jobId) return c.json({ error: 'jobId required' }, 400);
+    // jobId is embedded in the AI-server URL path — accept UUIDs only (#37).
+    const jobIdParse = jobIdSchema.safeParse(c.req.query('jobId'));
+    if (!jobIdParse.success) return c.json({ error: 'invalid jobId' }, 400);
+    const jobId = jobIdParse.data;
+
+    // Bind the job to this user; re-upload by the owner is allowed, but a
+    // jobId already claimed by someone else is rejected.
+    if (!(await claimJob(c.env.DB, jobId, user.id)))
+      return c.json({ error: 'jobId already in use' }, 409);
 
     const total = Number(c.req.header('content-length') ?? 0);
     const body = c.req.raw.body;
     if (!body || !total) return c.json({ error: 'empty body' }, 400);
 
+    // Quota is reserved only after jobId format + ownership checks pass, so
+    // malformed or foreign requests never consume or churn quota (#36, #37).
     const quota = await reserveQuota(c.env.DB, user.id, user.plan);
     if (!quota.ok) return c.json({ error: 'quota_exceeded', used: quota.used, limit: quota.limit }, 429);
 
@@ -289,8 +312,17 @@ const routes = app
   .get('/images/progress', async (c) => {
     const user = await getSessionUser(c);
     if (!user) return c.json({ error: 'Unauthorized' }, 401);
-    const jobId = c.req.query('jobId');
-    if (!jobId) return c.json({ error: 'jobId required' }, 400);
+
+    // Same strict format check as /images/upload (#37).
+    const jobIdParse = jobIdSchema.safeParse(c.req.query('jobId'));
+    if (!jobIdParse.success) return c.json({ error: 'invalid jobId' }, 400);
+    const jobId = jobIdParse.data;
+
+    // Ownership check. The frontend opens this SSE before the upload XHR, so
+    // an unseen jobId is claimed here for the session user; a job belonging
+    // to another user yields 404 without revealing that it exists.
+    if (!(await claimJob(c.env.DB, jobId, user.id)))
+      return c.json({ error: 'Not found' }, 404);
 
     let aiResponse: Response;
     try {

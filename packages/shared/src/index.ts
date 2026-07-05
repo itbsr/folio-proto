@@ -4,6 +4,7 @@ export {
   usageInfoSchema,
   progressEventSchema,
   processStreamEventSchema,
+  jobIdSchema,
 } from './schemas/images';
 export type { User, Plan } from './types/auth';
 export type {

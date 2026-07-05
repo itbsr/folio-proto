@@ -45,3 +45,9 @@ export const processStreamEventSchema = z.union([
   z.object({ progress: z.number(), stage: z.string() }).strict(),
   z.object({ error: z.string() }).strict(),
 ]);
+
+// Correlates POST /api/images/upload with GET /api/images/progress (Design A).
+// Client-generated via crypto.randomUUID(); the backend embeds it in the AI
+// server URL path, so the format must be strictly validated (UUID only —
+// rejects path traversal like "../admin") on every endpoint that accepts it.
+export const jobIdSchema = z.string().uuid();

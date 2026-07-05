@@ -144,6 +144,8 @@ make clean     # イメージ削除
 | POST | `/api/images/process` | シンプルなリクエスト/レスポンス（完了までブロック） |
 | POST | `/api/images/process-stream` | SSE で進捗配信（`received → infer → done`） |
 | POST | `/api/images/upload` + GET `/api/images/progress` | アップロード（XHR バイト進捗）と SSE 進捗を分離した最も完全な方式（4フェーズ） |
+
+`upload` / `progress` の `jobId` クエリはクライアントが `crypto.randomUUID()` で生成し、両エンドポイントとも UUID 形式のみ受け付けます（不正な形式は 400）。jobId は最初に使用した認証ユーザーに D1 の `jobs` テーブルで紐付けられ、他ユーザーが同じ jobId で `progress` を購読すると 404、`upload` すると 409 になります（マイグレーション `0002_jobs.sql` が必要）。
 | GET | `/api/images/history` | 処理履歴 |
 | GET | `/api/images/usage` | 今月の使用量とクォータ |
 
