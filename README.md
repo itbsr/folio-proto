@@ -99,6 +99,8 @@ wrangler secret put AI_ENDPOINT [-e staging]
 wrangler secret put AI_API_KEY  [-e staging]
 ```
 
+CORS の許可オリジンは `packages/backend/wrangler.toml` の `CORS_ORIGINS` 変数（カンマ区切り）で環境ごとに定義します。完全一致のオリジンに加え、`https://*.grad-proto.pages.dev` のようなサフィックスワイルドカード（スキーム完全一致 + サブドメイン一致。部分文字列一致はしない）を指定できます。許可外・Origin なしのリクエストには `Access-Control-Allow-Origin` を返しません。Wrangler の環境は vars を継承しないため、トップレベル（production / `wrangler dev`）と `[env.staging]` の両方に定義が必要です。本番のフロントエンドのオリジンが変わる場合は `CORS_ORIGINS` の更新も必要です。
+
 ### 4. 開発サーバーの起動
 
 ```bash
@@ -191,6 +193,9 @@ npx wrangler d1 migrations apply grad-proto-db-staging --remote -e staging  # st
 # シークレットの設定（環境ごとに必要）
 npx wrangler secret put AI_ENDPOINT [-e staging]   # AI サーバーの公開 URL
 npx wrangler secret put AI_API_KEY  [-e staging]   # AI サーバーの Bearer トークン
+
+# CORS 許可オリジン: wrangler.toml の CORS_ORIGINS を実際のフロントエンドの
+# オリジンに合わせてからデプロイする（トップレベル = production、[env.staging] = staging）
 
 # デプロイ
 npm run deploy --workspace=@my-app/backend   # production（ルートから実行可）

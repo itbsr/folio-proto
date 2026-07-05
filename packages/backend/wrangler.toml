@@ -13,6 +13,13 @@ database_name = "grad-proto-db"
 database_id = "372e0b01-8b4a-4a97-a647-e8d0c0f28978"
 migrations_dir = "migrations"
 
+# CORS allowlist: comma-separated exact origins; `https://*.<suffix>` entries
+# match any subdomain (scheme checked exactly, host suffix dot-anchored).
+# Environments do NOT inherit vars — keep this and [env.staging.vars] explicit.
+# Replace the pages.dev origin if the production frontend moves to a custom domain.
+[vars]
+CORS_ORIGINS = "https://grad-proto.pages.dev"
+
 # ── Staging (main / PR previews) ─────────────────────────────────────────
 # Separate Worker + separate DB. Environments do NOT inherit bindings, so the
 # D1 binding is re-declared here.
@@ -25,6 +32,11 @@ binding = "DB"
 database_name = "grad-proto-db-staging"
 database_id = "ecfe3f84-a920-496d-a5f4-41d64a646dd7"
 migrations_dir = "migrations"
+
+# Staging serves the Pages previews (main/pr-N branch aliases and per-deploy
+# `https://<hash>.grad-proto.pages.dev` URLs), so a suffix wildcard is needed.
+[env.staging.vars]
+CORS_ORIGINS = "https://grad-proto.pages.dev,https://*.grad-proto.pages.dev"
 
 # Secrets — set PER ENVIRONMENT via `wrangler secret put <NAME> [-e staging]`:
 #   AI_ENDPOINT  — on-premise DewarpNet server URL

@@ -4,13 +4,23 @@ import { zValidator } from '@hono/zod-validator';
 import { setCookie, deleteCookie, getCookie } from 'hono/cookie';
 import { registerSchema, loginSchema, processImageSchema } from '@my-app/shared';
 import { hashPassword, verifyPassword } from './lib/crypto';
+import { isOriginAllowed, parseAllowedOrigins } from './lib/cors';
 import { callDewarpNet, streamDewarpNet, uploadToAi, aiProgressStream } from './services/ai';
 import { PLAN_LIMITS } from './middleware/quota';
 import type { Context } from 'hono';
 import type { Bindings } from './types';
 
 const app = new Hono<{ Bindings: Bindings }>().basePath('/api');
-app.use('*', cors({ origin: (o) => o ?? '*', credentials: true, allowHeaders: ['Content-Type'], exposeHeaders: ['X-Usage', 'X-Result-Bytes'] }));
+// Only origins allowlisted in CORS_ORIGINS get an Access-Control-Allow-Origin
+// header (echoed exactly, as required with credentials). Everything else —
+// including requests without an Origin — gets none. See src/lib/cors.ts.
+app.use('*', cors({
+  origin: (origin, c) =>
+    isOriginAllowed(origin, parseAllowedOrigins((c.env as Bindings).CORS_ORIGINS)) ? origin : null,
+  credentials: true,
+  allowHeaders: ['Content-Type'],
+  exposeHeaders: ['X-Usage', 'X-Result-Bytes'],
+}));
 
 // ── Auth helpers ──────────────────────────────────────────────────────────
 async function getSessionUser(c: Context<{ Bindings: Bindings }>) {
