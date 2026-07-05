@@ -34,8 +34,29 @@ export async function hashPassword(password: string): Promise<string> {
   return `${toHex(salt.buffer as ArrayBuffer)}:${toHex(hash)}`;
 }
 
+// Non-empty, even-length hex (lowercase or uppercase). Matches the format
+// produced by hashPassword; anything else in `stored` is a corrupt row.
+const HEX_RE = /^(?:[0-9a-f]{2})+$/i;
+
+/**
+ * Constant-time byte comparison (XOR-accumulate). Portable across workerd,
+ * Miniflare and Node, unlike the Workers-only crypto.subtle.timingSafeEqual.
+ * A length mismatch returns false; length itself is not secret here.
+ */
+function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
-  const [saltHex, hashHex] = stored.split(':');
+  // A malformed stored value (corrupt row, wrong delimiter, bad hex) must
+  // fail verification like any wrong password — never throw into a 500.
+  const parts = stored.split(':');
+  if (parts.length !== 2) return false;
+  const [saltHex, hashHex] = parts;
+  if (!HEX_RE.test(saltHex) || !HEX_RE.test(hashHex)) return false;
   const hash = await derive(password, fromHex(saltHex));
-  return toHex(hash) === hashHex;
+  return timingSafeEqual(new Uint8Array(hash), fromHex(hashHex));
 }
