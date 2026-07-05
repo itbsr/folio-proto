@@ -9,5 +9,10 @@ tmp
 .tmp/
 ai-server/.env
 
+# Python (ai-server tests)
+.venv/
+__pycache__/
+.pytest_cache/
+
 # Ephemeral working notes — use the built-in task tool instead (see CLAUDE.md)
 tasks/todo.md

@@ -31,6 +31,26 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
 
+  # ── Python tests (ai-server) — PR check only, NOT a deploy gate ───────────
+  # Deliberately absent from every `needs:` below: the ai-server ships via
+  # Docker (make deploy), not through this workflow (deferred from PR #68 to
+  # issue #63). torch stays Docker-only; tests run against a stubbed pipeline.
+  ci-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'  # matches ai-server/Dockerfile.base
+          cache: 'pip'
+          cache-dependency-path: |
+            ai-server/requirements.txt
+            ai-server/requirements-dev.txt
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+        working-directory: ai-server
+      - run: python -m pytest
+        working-directory: ai-server
+
   # ── Production (release) ──────────────────────────────────────────────────
   production:
     needs: ci

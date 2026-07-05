@@ -125,6 +125,18 @@ make logs      # ログを tail
 make clean     # イメージ削除
 ```
 
+### ai-server のテスト
+
+pytest で実行します。torch は Docker 専用のため venv には入れず、API テストは fake pipeline（`tests/conftest.py` が `inference.pipeline` をスタブ）で動きます。
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r ai-server/requirements.txt -r ai-server/requirements-dev.txt
+cd ai-server && ../.venv/bin/python -m pytest
+```
+
+CI では `ci-python` ジョブ（`.github/workflows/deploy.yml`）が PR ごとに同じテストを実行します（デプロイのゲートではありません）。
+
 ## API エンドポイント
 
 すべて `/api` 配下。認証はセッション Cookie（HTTP-only、7日で失効）。
