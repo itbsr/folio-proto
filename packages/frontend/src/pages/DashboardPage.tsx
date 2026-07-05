@@ -5,6 +5,7 @@ import client, { API_BASE } from '../lib/hc';
 import { fileToBase64, isAcceptableImage, IMAGE_ACCEPT } from '../lib/imageFile';
 import { buildPdfFromPngImages, downloadBlob } from '../lib/exportPdf';
 import { convertPngBase64ToJpegBlob } from '../lib/exportJpg';
+import { progressEventSchema } from '@my-app/shared';
 import type { UsageInfo, HistoryItem } from '@my-app/shared';
 
 // ─────────────────────────────────────────────
@@ -711,31 +712,33 @@ function ScreenProcessing({ lang, go, job, jobIndex, totalJobs, queueSummary, on
     );
 
     es.onmessage = (e) => {
-      let ev: Record<string, unknown>;
-      try { ev = JSON.parse(e.data); } catch { return; }
+      let raw: unknown;
+      try { raw = JSON.parse(e.data); } catch { return; }
+      const parsed = progressEventSchema.safeParse(raw);
+      if (!parsed.success) return; // 未知/不正なイベントは従来どおり無視
+      const ev = parsed.data;
       switch (ev.type) {
         case 'received':                          // ② 推論サーバ受信（上り）
-          setAiArrivalPct(Math.round(ev.pct as number));
+          setAiArrivalPct(Math.round(ev.pct));
           break;
         case 'infer': {                           // ③ 推論
-          const overall = ev.pct as number;
+          const overall = ev.pct;
           setPct(overall);
           setInferPct(Math.round(Math.min(100, Math.max(0, overall))));
-          const step = ev.step as string | undefined;
-          if (step && stagePhase[step] != null) setPhase(stagePhase[step]);
+          if (stagePhase[ev.step] != null) setPhase(stagePhase[ev.step]);
           break;
         }
         case 'result_sent':                       // ③' 推論サーバ送出（下り）
           setAiArrivalPct(100);
           setInferPct(100);
-          setResultSentPct(Math.round(ev.pct as number));
+          setResultSentPct(Math.round(ev.pct));
           break;
         case 'done':
           setResultSentPct(100);
           es.close();
           break;
         case 'error': {
-          const msg = (ev.message as string) ?? (jp ? '処理に失敗しました' : 'Processing failed');
+          const msg = ev.message || (jp ? '処理に失敗しました' : 'Processing failed');
           if (!settled) { setError(msg); onError(job.id, msg); finish(); }
           es.close();
           break;

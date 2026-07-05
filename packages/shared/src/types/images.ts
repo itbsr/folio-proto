@@ -1,8 +1,11 @@
-export type UsageInfo = {
-  used: number;
-  limit: number;
-  month: string;
-};
+import type { z } from 'zod';
+import type {
+  processStreamEventSchema,
+  progressEventSchema,
+  usageInfoSchema,
+} from '../schemas/images';
+
+export type UsageInfo = z.infer<typeof usageInfoSchema>;
 
 export type ProcessResult = {
   result_image: string;
@@ -17,10 +20,9 @@ export type HistoryItem = {
 };
 
 // Design A progress stream (GET /api/images/progress?jobId=…).
-// One SSE carries: ② 推論サーバ到達 (received) → ③ 推論 (infer) → done/error.
-// Note: ① CF到達 is NOT here — it comes from the client's XHR upload.onprogress.
-export type ProgressEvent =
-  | { type: 'received'; pct: number } // ② CF→推論サーバ到達 (0..100)
-  | { type: 'infer'; pct: number; step: string } // ③ 推論 (0..100)
-  | { type: 'done'; result: string; usage: UsageInfo } // usage は Worker が注入
-  | { type: 'error'; message: string };
+// See schemas/images.ts for the exact wire format each event carries.
+export type ProgressEvent = z.infer<typeof progressEventSchema>;
+
+// Legacy stream (POST /api/images/process-stream) — keyed by `stage`/`error`,
+// and its `done` DOES carry the result payload (+ Worker-injected `usage`).
+export type ProcessStreamEvent = z.infer<typeof processStreamEventSchema>;
