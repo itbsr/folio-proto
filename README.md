@@ -113,7 +113,7 @@ AI サーバー（`make run` で port 8000）、バックエンド、フロン�
 npm run dev:backend    # バックエンド開発サーバー（Wrangler）
 npm run dev:frontend   # フロントエンド開発サーバー（Vite）
 npm run build          # 全ワークスペースをビルド
-npm test               # 全ワークスペースのテストを実行（Vitest。backend は workerd + Miniflare D1 上で実行）
+npm test               # 全ワークスペースのテストを実行（Vitest。backend は workerd + Miniflare D1、frontend は jsdom 上で実行）
 npm run typecheck      # 型チェック（emit なし）
 npm run deploy --workspace=@my-app/backend   # Cloudflare Workers へデプロイ
 
