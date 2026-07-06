@@ -5,7 +5,7 @@ import { setCookie, deleteCookie, getCookie } from 'hono/cookie';
 import { registerSchema, loginSchema, processImageSchema } from '@my-app/shared';
 import { hashPassword, verifyPassword } from './lib/crypto';
 import { callDewarpNet, streamDewarpNet, uploadToAi, aiProgressStream } from './services/ai';
-import { PLAN_LIMITS } from './middleware/quota';
+import { PLAN_LIMITS } from './lib/quota';
 import type { Context } from 'hono';
 import type { Bindings } from './types';
 
