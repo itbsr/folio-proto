@@ -8,6 +8,7 @@ import type { JobStatus } from '../lib/processQueue';
 import { buildPdfFromPngImages, downloadBlob } from '../lib/exportPdf';
 import { convertPngBase64ToJpegBlob } from '../lib/exportJpg';
 import { progressEventSchema } from '@my-app/shared';
+import { exportSizeLabel } from '../lib/exportSize';
 import type { UsageInfo, HistoryItem } from '@my-app/shared';
 
 // ─────────────────────────────────────────────
@@ -1458,6 +1459,8 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
   const hasMultiple = (allJobs?.length ?? 0) > 1;
   const pdfAllFilename = `folio-corrected-${new Date().toISOString().slice(0, 10)}.pdf`;
   const displayFilename = format === 'pdf' && hasMultiple ? pdfAllFilename : `${baseName}-corrected.${format}`;
+  // Size of the export named in FILENAME: all pages for multi-page PDF, else the current page.
+  const displaySize = exportSizeLabel(format, format === 'pdf' && hasMultiple ? allJobs!.map((j) => j.resultImage) : resultImage ? [resultImage] : []);
 
   const runExport = async () => {
     if (!resultImage) return;
@@ -1571,7 +1574,7 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
             <div className="rule" style={{ margin: '12px 0' }} />
             <div className="row between">
               <span className="label">{jp ? '推定サイズ' : 'ESTIMATE'}</span>
-              <span className="mono" style={{ fontSize: 12, color: 'var(--accent)' }}>≈ 2.4 MB</span>
+              <span className="mono" style={{ fontSize: 12, color: 'var(--accent)' }}>{displaySize}</span>
             </div>
           </div>
           {format !== 'pdf' && hasMultiple && (
