@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import client, { API_BASE } from '../lib/hc';
 import { fileToBase64, isAcceptableImage, IMAGE_ACCEPT } from '../lib/imageFile';
+import { decideAdvance } from '../lib/processQueue';
+import type { JobStatus } from '../lib/processQueue';
 import { buildPdfFromPngImages, downloadBlob } from '../lib/exportPdf';
 import { convertPngBase64ToJpegBlob } from '../lib/exportJpg';
 import type { UsageInfo, HistoryItem } from '@my-app/shared';
@@ -62,9 +64,8 @@ type Lang = 'jp' | 'en';
 
 // ─────────────────────────────────────────────
 // FILE QUEUE (issue #3 — multi-file support)
+// JobStatus + the advance decision live in lib/processQueue.ts (issue #31)
 // ─────────────────────────────────────────────
-type JobStatus = 'pending' | 'processing' | 'done' | 'error';
-
 type FileJob = {
   id: string;
   file: File;
@@ -1716,6 +1717,7 @@ export function DashboardPage() {
   const [fileQueue, setFileQueue] = useState<FileJob[]>([]);
   const fileQueueRef = useRef<FileJob[]>([]);
   const [processingIdx, setProcessingIdx] = useState(0);
+  const processingIdxRef = useRef(0);
   const [viewIdx, setViewIdx] = useState(0);
 
   // Keep ref in sync for stale-closure-safe reads
@@ -1774,16 +1776,28 @@ export function DashboardPage() {
     }).catch(() => {});
   };
 
+  // Mark one job's fields both in React state and in the ref, so a
+  // synchronous advanceQueue() right after sees the settled status.
+  const patchJob = (jobId: string, patch: Partial<FileJob>) => {
+    const apply = (q: FileJob[]) => q.map((j) => (j.id === jobId ? { ...j, ...patch } : j));
+    fileQueueRef.current = apply(fileQueueRef.current);
+    setFileQueue(apply);
+  };
+
   const advanceQueue = () => {
-    const next = processingIdx + 1;
-    const total = fileQueueRef.current.length;
-    if (next < total) {
-      setFileQueue((q) => q.map((j, i) => i === next ? { ...j, status: 'processing' as JobStatus } : j));
+    const decision = decideAdvance(fileQueueRef.current, processingIdxRef.current);
+    if (decision.kind === 'advance') {
+      const next = decision.nextIdx;
+      const mark = (q: FileJob[]) => q.map((j, i) => (i === next ? { ...j, status: 'processing' as JobStatus } : j));
+      fileQueueRef.current = mark(fileQueueRef.current);
+      setFileQueue(mark);
+      processingIdxRef.current = next;
       setProcessingIdx(next);
-    } else {
+    } else if (decision.kind === 'finished') {
       setViewIdx(0);
       go('compare');
     }
+    // 'noop': current job has not settled — never advance twice for one job.
   };
 
   const handleFiles = (files: File[]) => {
@@ -1802,6 +1816,7 @@ export function DashboardPage() {
     setFileQueue(jobs);
     fileQueueRef.current = jobs;
     setProcessingIdx(0);
+    processingIdxRef.current = 0;
     setViewIdx(0);
 
     // Convert files to base64 concurrently; navigate to processing after the first is ready
@@ -1819,25 +1834,26 @@ export function DashboardPage() {
         })
         .catch((err) => {
           console.error(err);
-          setFileQueue((prev) =>
-            prev.map((j) =>
-              j.id === job.id ? { ...j, status: 'error', errorMsg: 'File conversion failed' } : j,
-            ),
-          );
-          if (i === 0) advanceQueue();
+          if (!fileQueueRef.current.some((j) => j.id === job.id)) return; // superseded batch
+          patchJob(job.id, { status: 'error', errorMsg: 'File conversion failed' });
+          // Even a failed first file must surface the queue UI so later jobs run.
+          if (i === 0) go('processing');
+          // If the queue is waiting on this job (its turn arrived before the
+          // conversion settled), unblock it now (issue #31).
+          if (i === processingIdxRef.current) advanceQueue();
         });
     });
   };
 
   const handleJobResult = (jobId: string, result: string, newUsage: UsageInfo) => {
-    setFileQueue((q) => q.map((j) => j.id === jobId ? { ...j, resultImage: result, status: 'done' as JobStatus } : j));
+    patchJob(jobId, { resultImage: result, status: 'done' });
     setUsage(newUsage);
     refreshHistory();
     advanceQueue();
   };
 
   const handleJobError = (jobId: string, errorMsg: string) => {
-    setFileQueue((q) => q.map((j) => j.id === jobId ? { ...j, status: 'error' as JobStatus, errorMsg } : j));
+    patchJob(jobId, { status: 'error', errorMsg });
     setTimeout(advanceQueue, 1500);
   };
 
