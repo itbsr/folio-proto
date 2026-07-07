@@ -321,9 +321,11 @@ const routes = app
     const user = await getSessionUser(c);
     if (!user) return c.json({ error: 'Unauthorized' }, 401);
     const quota = await getQuotaUsage(c.env.DB, user.id, user.plan);
-    const nextMonth = new Date();
-    nextMonth.setMonth(nextMonth.getMonth() + 1, 1);
-    nextMonth.setHours(0, 0, 0, 0);
+    // Quota months are keyed by UTC (YYYY-MM), so the reset instant must be
+    // computed in UTC too — local-time setMonth/setHours would drift under
+    // `wrangler dev` on non-UTC machines.
+    const now = new Date();
+    const nextMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
     return c.json({ month: quota.month, used: quota.used, limit: quota.limit, reset_at: nextMonth.toISOString(), plan: user.plan });
   });
 
