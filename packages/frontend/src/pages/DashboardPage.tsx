@@ -8,6 +8,7 @@ import type { JobStatus } from '../lib/processQueue';
 import { buildPdfFromPngImages, downloadBlob } from '../lib/exportPdf';
 import { convertPngBase64ToJpegBlob } from '../lib/exportJpg';
 import { progressEventSchema } from '@my-app/shared';
+import { matchesHistorySearch } from '../lib/historySearch';
 import type { UsageInfo, HistoryItem } from '@my-app/shared';
 
 // ─────────────────────────────────────────────
@@ -1610,10 +1611,7 @@ function ScreenHistory({ lang, go, history }: { lang: Lang; go: (id: ScreenId) =
   const jp = lang === 'jp';
   const [search, setSearch] = useState('');
 
-  const filtered = history.filter((item) => {
-    const q = search.toLowerCase();
-    return !q || item.status.includes(q);
-  });
+  const filtered = history.filter((item) => matchesHistorySearch(item, search));
 
   return (
     <div className="screen reveal" data-screen-label="09 Archive">
