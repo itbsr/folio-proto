@@ -8,6 +8,14 @@ import type { JobStatus } from '../lib/processQueue';
 import { buildPdfFromPngImages, downloadBlob } from '../lib/exportPdf';
 import { convertPngBase64ToJpegBlob } from '../lib/exportJpg';
 import { progressEventSchema } from '@my-app/shared';
+import {
+  DEFAULT_FILTER_SETTINGS,
+  applyFilterSettingsToPngBase64,
+  buildCssFilter,
+  type FilterPresetId,
+  type FilterSettings,
+} from '../lib/imageFilters';
+import { FULL_FRAME_QUAD, warpPngBase64, type Quad } from '../lib/perspective';
 import type { UsageInfo, HistoryItem } from '@my-app/shared';
 
 // ─────────────────────────────────────────────
@@ -1195,12 +1203,13 @@ function ScreenCompare({ lang, go, inputImage, resultImage, viewIdx, totalJobs, 
 // ─────────────────────────────────────────────
 // SCREEN 06 · ADJUST
 // ─────────────────────────────────────────────
-function ScreenAdjust({ lang, go, resultImage, viewIdx, totalJobs, onViewChange }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null; viewIdx: number; totalJobs: number; onViewChange: (idx: number) => void; }) {
+const ADJUST_STAGE_ASPECT = 4 / 3; // must match the stage's CSS aspectRatio below
+
+function ScreenAdjust({ lang, go, resultImage, viewIdx, totalJobs, onViewChange, onApply }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null; viewIdx: number; totalJobs: number; onViewChange: (idx: number) => void; onApply: (newResultImage: string) => void; }) {
   const jp = lang === 'jp';
-  const [corners, setCorners] = useState([
-    { x: 18, y: 12 }, { x: 88, y: 16 }, { x: 86, y: 92 }, { x: 14, y: 88 },
-  ]);
+  const [corners, setCorners] = useState<Quad>(FULL_FRAME_QUAD);
   const [active, setActive] = useState<number | null>(null);
+  const [applying, setApplying] = useState(false);
   const stage = useRef<HTMLDivElement>(null);
 
   const onMove = useCallback((e: MouseEvent | TouchEvent) => {
@@ -1210,7 +1219,7 @@ function ScreenAdjust({ lang, go, resultImage, viewIdx, totalJobs, onViewChange 
     const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY;
     const x = ((clientX - r.left) / r.width) * 100;
     const y = ((clientY - r.top) / r.height) * 100;
-    setCorners((c) => c.map((p, i) => i === active ? { x: Math.max(2, Math.min(98, x)), y: Math.max(2, Math.min(98, y)) } : p));
+    setCorners((c) => c.map((p, i) => i === active ? { x: Math.max(0, Math.min(100, x)), y: Math.max(0, Math.min(100, y)) } : p) as Quad);
   }, [active]);
 
   useEffect(() => {
@@ -1229,8 +1238,44 @@ function ScreenAdjust({ lang, go, resultImage, viewIdx, totalJobs, onViewChange 
     };
   }, [active, onMove]);
 
-  const reset = () => setCorners([{ x: 18, y: 12 }, { x: 88, y: 16 }, { x: 86, y: 92 }, { x: 14, y: 88 }]);
-  const snap = () => setCorners([{ x: 8, y: 8 }, { x: 92, y: 8 }, { x: 92, y: 92 }, { x: 8, y: 92 }]);
+  const reset = () => setCorners(FULL_FRAME_QUAD);
+
+  // Arrow keys nudge the focused handle by 1 px (Shift: 10 px), converted to
+  // stage percentages so the promise in the help card is literal.
+  const nudge = (i: number, e: React.KeyboardEvent) => {
+    const dir: Record<string, [number, number]> = {
+      ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
+    };
+    const d = dir[e.key];
+    if (!d) return;
+    e.preventDefault();
+    const r = stage.current?.getBoundingClientRect();
+    if (!r || r.width === 0 || r.height === 0) return;
+    const px = e.shiftKey ? 10 : 1;
+    const dx = (d[0] * px * 100) / r.width;
+    const dy = (d[1] * px * 100) / r.height;
+    setCorners((c) => c.map((p, idx) => idx === i
+      ? { x: Math.max(0, Math.min(100, p.x + dx)), y: Math.max(0, Math.min(100, p.y + dy)) }
+      : p) as Quad);
+  };
+
+  // Warp the corrected image to the selected quad and store it as the new
+  // result, so filters and every export path operate on the adjusted page.
+  const applyUpdate = async () => {
+    if (!resultImage) { go('filter'); return; }
+    setApplying(true);
+    try {
+      const warped = await warpPngBase64(resultImage, corners, ADJUST_STAGE_ASPECT);
+      if (warped !== resultImage) onApply(warped);
+      go('filter');
+    } catch (err) {
+      console.error('Perspective warp failed; keeping the original result', err);
+      go('filter');
+    } finally {
+      setApplying(false);
+    }
+  };
+
   const poly = corners.map((c) => `${c.x},${c.y}`).join(' ');
   const cornerNames = jp
     ? ['左上 / TL', '右上 / TR', '右下 / BR', '左下 / BL']
@@ -1248,7 +1293,6 @@ function ScreenAdjust({ lang, go, resultImage, viewIdx, totalJobs, onViewChange 
         <div className="row" style={{ gap: 8 }}>
           <JobSwitcher viewIdx={viewIdx} totalJobs={totalJobs} onViewChange={onViewChange} lang={lang} />
           <button className="btn ghost" onClick={reset}>{jp ? '元に戻す' : 'Reset'}</button>
-          <button className="btn ghost" onClick={snap}>⌂ {jp ? '外枠にスナップ' : 'Snap to frame'}</button>
         </div>
       </div>
       <div className="rule-thick" />
@@ -1278,8 +1322,10 @@ function ScreenAdjust({ lang, go, resultImage, viewIdx, totalJobs, onViewChange 
           {corners.map((c, i) => (
             <button
               key={i}
-              onMouseDown={(e) => { e.preventDefault(); setActive(i); }}
+              aria-label={cornerNames[i]}
+              onMouseDown={(e) => { setActive(i); (e.currentTarget as HTMLButtonElement).focus(); }}
               onTouchStart={(e) => { e.preventDefault(); setActive(i); }}
+              onKeyDown={(e) => nudge(i, e)}
               style={{
                 position: 'absolute', left: `${c.x}%`, top: `${c.y}%`,
                 transform: 'translate(-50%, -50%)', width: 28, height: 28,
@@ -1316,15 +1362,17 @@ function ScreenAdjust({ lang, go, resultImage, viewIdx, totalJobs, onViewChange 
           </div>
           <div className="card">
             <div className="label" style={{ marginBottom: 6 }}>{jp ? '微調整キー' : 'KEYBOARD NUDGE'}</div>
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--mute)' }}>{jp ? '矢印キーで 1px、Shift で 10px。' : 'Arrow keys 1 px · Shift = 10 px.'}</p>
+            <p style={{ margin: 0, fontSize: 12, color: 'var(--mute)' }}>{jp ? 'ハンドルをクリックして選択し、矢印キーで 1px、Shift 併用で 10px。' : 'Click a handle, then Arrow keys = 1 px · Shift = 10 px.'}</p>
             <div className="row" style={{ gap: 6, marginTop: 8, fontFamily: 'var(--font-mono)', fontSize: 10 }}>
               {['←', '↑', '↓', '→', '⇧'].map((k) => (
                 <span key={k} style={{ border: '1px solid var(--rule-strong)', padding: '3px 7px' }}>{k}</span>
               ))}
             </div>
           </div>
-          <button className="btn accent" onClick={() => go('filter')}>
-            {jp ? '結果を更新' : 'Apply update'} <span className="arrow">→</span>
+          <button className="btn accent" onClick={applyUpdate} disabled={applying}>
+            {applying
+              ? (jp ? '★ 適用中…' : '★ Applying…')
+              : (<>{jp ? '結果を更新' : 'Apply update'} <span className="arrow">→</span></>)}
           </button>
           <button className="btn ghost" onClick={() => go('compare')}>
             ← {jp ? '比較に戻る' : 'Back to compare'}
@@ -1338,25 +1386,47 @@ function ScreenAdjust({ lang, go, resultImage, viewIdx, totalJobs, onViewChange 
 // ─────────────────────────────────────────────
 // SCREEN 07 · FILTER
 // ─────────────────────────────────────────────
-const FILTER_PRESETS = [
-  { id: 'original',   jp: 'オリジナル',       en: 'Original',    f: 'none', desc_jp: '撮ったまま',           desc_en: 'Untouched' },
-  { id: 'magazine',   jp: '雑誌',             en: 'Magazine',    f: 'contrast(1.18) brightness(1.04) saturate(1.05)', desc_jp: '印刷物に近い深い黒', desc_en: 'Deep print-press blacks' },
-  { id: 'paperwhite', jp: 'ホワイトペーパー', en: 'Paperwhite',  f: 'contrast(1.35) brightness(1.14) saturate(0.5)', desc_jp: '用紙を真っ白に整える', desc_en: 'Pure-white paper' },
-  { id: 'mono',       jp: 'モノクロ',         en: 'B & W',       f: 'grayscale(1) contrast(1.22) brightness(1.05)', desc_jp: 'シャープな白黒', desc_en: 'Sharp monochrome' },
-  { id: 'blueprint',  jp: 'ブループリント',   en: 'Blueprint',   f: 'grayscale(1) sepia(0.6) hue-rotate(180deg) saturate(3) contrast(1.1)', desc_jp: '図面風の青地', desc_en: 'Drafting cyan' },
-  { id: 'amber',      jp: 'アンバー',         en: 'Amber',       f: 'sepia(0.6) contrast(1.12) brightness(1.04) saturate(1.2)', desc_jp: '原稿用紙の温かみ', desc_en: 'Manuscript warmth' },
+const FILTER_PRESETS: { id: FilterPresetId; jp: string; en: string; desc_jp: string; desc_en: string }[] = [
+  { id: 'original',   jp: 'オリジナル',       en: 'Original',    desc_jp: '撮ったまま',           desc_en: 'Untouched' },
+  { id: 'magazine',   jp: '雑誌',             en: 'Magazine',    desc_jp: '印刷物に近い深い黒', desc_en: 'Deep print-press blacks' },
+  { id: 'paperwhite', jp: 'ホワイトペーパー', en: 'Paperwhite',  desc_jp: '用紙を真っ白に整える', desc_en: 'Pure-white paper' },
+  { id: 'mono',       jp: 'モノクロ',         en: 'B & W',       desc_jp: 'シャープな白黒', desc_en: 'Sharp monochrome' },
+  { id: 'blueprint',  jp: 'ブループリント',   en: 'Blueprint',   desc_jp: '図面風の青地', desc_en: 'Drafting cyan' },
+  { id: 'amber',      jp: 'アンバー',         en: 'Amber',       desc_jp: '原稿用紙の温かみ', desc_en: 'Manuscript warmth' },
 ];
 
-function ScreenFilter({ lang, go, resultImage, viewIdx, totalJobs, onViewChange }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null; viewIdx: number; totalJobs: number; onViewChange: (idx: number) => void; }) {
-  const jp = lang === 'jp';
-  const [preset, setPreset] = useState('paperwhite');
-  const [bright, setBright] = useState(0);
-  const [contrast, setContrast] = useState(0);
-  const [warm, setWarm] = useState(0);
-  const [sharp, setSharp] = useState(0);
+const presetCss = (id: FilterPresetId) => buildCssFilter({ ...DEFAULT_FILTER_SETTINGS, preset: id });
 
-  const cur = FILTER_PRESETS.find((p) => p.id === preset)!;
-  const filterStr = `${cur.f} brightness(${1 + bright / 200}) contrast(${1 + contrast / 200}) sepia(${Math.max(0, warm / 200)}) saturate(${1 + warm / 300})`;
+/**
+ * Sharpness has no CSS `filter` equivalent, so it is rendered into the
+ * preview via the canvas pixel pipeline, debounced so slider drags stay
+ * cheap: CSS-representable settings update live, the unsharp mask lands
+ * ~250 ms after the slider settles. Returns null while nothing sharpened
+ * is available (callers fall back to the raw image).
+ */
+function useSharpenedPreview(image: string | null, sharpness: number): string | null {
+  const [sharpened, setSharpened] = useState<string | null>(null);
+  useEffect(() => {
+    if (!image || sharpness === 0) { setSharpened(null); return; }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      applyFilterSettingsToPngBase64(image, { ...DEFAULT_FILTER_SETTINGS, sharpness })
+        .then((out) => { if (!cancelled) setSharpened(out); })
+        .catch(() => { if (!cancelled) setSharpened(null); });
+    }, 250);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [image, sharpness]);
+  return sharpened;
+}
+
+function ScreenFilter({ lang, go, resultImage, viewIdx, totalJobs, onViewChange, settings, onSettingsChange }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null; viewIdx: number; totalJobs: number; onViewChange: (idx: number) => void; settings: FilterSettings; onSettingsChange: (s: FilterSettings) => void; }) {
+  const jp = lang === 'jp';
+  const set = (patch: Partial<FilterSettings>) => onSettingsChange({ ...settings, ...patch });
+
+  const cur = FILTER_PRESETS.find((p) => p.id === settings.preset)!;
+  const filterStr = buildCssFilter(settings);
+  const sharpenedSrc = useSharpenedPreview(resultImage, settings.sharpness);
+  const previewSrc = sharpenedSrc ?? resultImage;
 
   return (
     <div className="screen reveal" data-screen-label="07 Filters">
@@ -1369,7 +1439,7 @@ function ScreenFilter({ lang, go, resultImage, viewIdx, totalJobs, onViewChange 
         </div>
         <div className="row" style={{ gap: 8 }}>
           <JobSwitcher viewIdx={viewIdx} totalJobs={totalJobs} onViewChange={onViewChange} lang={lang} />
-          <button className="btn ghost" onClick={() => { setBright(0); setContrast(0); setWarm(0); setSharp(0); setPreset('paperwhite'); }}>
+          <button className="btn ghost" onClick={() => onSettingsChange(DEFAULT_FILTER_SETTINGS)}>
             ↺ {jp ? 'リセット' : 'Reset'}
           </button>
         </div>
@@ -1384,15 +1454,15 @@ function ScreenFilter({ lang, go, resultImage, viewIdx, totalJobs, onViewChange 
           </div>
           <div className="preview-canvas" style={{ position: 'relative', aspectRatio: '4/3', background: 'color-mix(in oklab, var(--ink) 6%, var(--bg))', padding: 32, border: '1px solid var(--rule-strong)', overflow: 'hidden' }}>
             <div style={{ width: '62%', height: '100%', margin: '0 auto', filter: filterStr, transition: 'filter .25s' }}>
-              {resultImage ? (
-                <img src={`data:image/png;base64,${resultImage}`} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+              {previewSrc ? (
+                <img src={`data:image/png;base64,${previewSrc}`} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
               ) : (
                 <DocPaperMock kind="essay" title="On Straightening" sub="FOLIO · FILTERED" />
               )}
             </div>
             <CornerBrackets color="var(--ink)" inset={12} size={22} weight={1.5} />
             <div style={{ position: 'absolute', bottom: 10, left: 12, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--mute)', letterSpacing: '0.1em' }}>
-              FILTER · {cur.id.toUpperCase()} · BR{bright >= 0 ? '+' : ''}{bright}
+              FILTER · {cur.id.toUpperCase()} · BR{settings.brightness >= 0 ? '+' : ''}{settings.brightness}
             </div>
           </div>
 
@@ -1401,8 +1471,8 @@ function ScreenFilter({ lang, go, resultImage, viewIdx, totalJobs, onViewChange 
             <div className="label" style={{ marginBottom: 10 }}>{jp ? 'プリセット' : 'PRESETS'}</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 8 }}>
               {FILTER_PRESETS.map((p) => (
-                <button key={p.id} onClick={() => setPreset(p.id)} style={{ appearance: 'none', padding: 6, border: `1px solid ${preset === p.id ? 'var(--accent)' : 'var(--rule-strong)'}`, background: preset === p.id ? 'color-mix(in oklab, var(--accent) 14%, var(--bg))' : 'var(--bg)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left' }}>
-                  <div style={{ aspectRatio: '0.74', overflow: 'hidden', filter: p.f, marginBottom: 6, background: 'var(--paper)' }}>
+                <button key={p.id} onClick={() => set({ preset: p.id })} style={{ appearance: 'none', padding: 6, border: `1px solid ${settings.preset === p.id ? 'var(--accent)' : 'var(--rule-strong)'}`, background: settings.preset === p.id ? 'color-mix(in oklab, var(--accent) 14%, var(--bg))' : 'var(--bg)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left' }}>
+                  <div style={{ aspectRatio: '0.74', overflow: 'hidden', filter: presetCss(p.id), marginBottom: 6, background: 'var(--paper)' }}>
                     <DocPaperMock kind="essay" title="—" />
                   </div>
                   <div className="mono" style={{ fontSize: 9, letterSpacing: '0.05em', textTransform: 'uppercase' }}>{jp ? p.jp : p.en}</div>
@@ -1415,7 +1485,12 @@ function ScreenFilter({ lang, go, resultImage, viewIdx, totalJobs, onViewChange 
         <aside className="col" style={{ gap: 16 }}>
           <div className="card">
             <div className="label" style={{ marginBottom: 14 }}>TONE & GRAIN</div>
-            {([[jp ? '明るさ' : 'Brightness', bright, setBright], [jp ? 'コントラスト' : 'Contrast', contrast, setContrast], [jp ? '色温度' : 'Warmth', warm, setWarm], [jp ? 'シャープネス' : 'Sharpness', sharp, setSharp]] as [string, number, (v: number) => void][]).map(([label, val, setter], i) => (
+            {([
+              [jp ? '明るさ' : 'Brightness', settings.brightness, (v: number) => set({ brightness: v })],
+              [jp ? 'コントラスト' : 'Contrast', settings.contrast, (v: number) => set({ contrast: v })],
+              [jp ? '色温度' : 'Warmth', settings.warmth, (v: number) => set({ warmth: v })],
+              [jp ? 'シャープネス' : 'Sharpness', settings.sharpness, (v: number) => set({ sharpness: v })],
+            ] as [string, number, (v: number) => void][]).map(([label, val, setter], i) => (
               <div key={i} style={{ padding: '10px 0', borderTop: '1px solid var(--rule)' }}>
                 <div className="row between" style={{ marginBottom: 6 }}>
                   <span style={{ fontSize: 13 }}>{label}</span>
@@ -1444,7 +1519,7 @@ function ScreenFilter({ lang, go, resultImage, viewIdx, totalJobs, onViewChange 
 // ─────────────────────────────────────────────
 // SCREEN 08 · EXPORT
 // ─────────────────────────────────────────────
-function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onViewChange, allJobs }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null; fileName?: string | null; viewIdx: number; totalJobs: number; onViewChange: (idx: number) => void; allJobs?: Array<{ resultImage: string; fileName: string }>; }) {
+function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onViewChange, allJobs, filterSettings }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null; fileName?: string | null; viewIdx: number; totalJobs: number; onViewChange: (idx: number) => void; allJobs?: Array<{ resultImage: string; fileName: string }>; filterSettings: FilterSettings; }) {
   const jp = lang === 'jp';
   const [format, setFormat] = useState<'png' | 'pdf' | 'jpg'>('pdf');
   const [exporting, setExporting] = useState(false);
@@ -1456,24 +1531,41 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
     ? fileName.replace(/\.[^/.]+$/, '')
     : `folio-${new Date().toISOString().slice(0, 10)}`;
   const hasMultiple = (allJobs?.length ?? 0) > 1;
+
+  // Preview mirrors the export: sharpness via the canvas pipeline (debounced),
+  // the CSS-representable settings via the same filter string the user saw.
+  const exportFilterStr = buildCssFilter(filterSettings);
+  const sharpenedSrc = useSharpenedPreview(resultImage, filterSettings.sharpness);
+  const previewSrc = sharpenedSrc ?? resultImage;
   const pdfAllFilename = `folio-corrected-${new Date().toISOString().slice(0, 10)}.pdf`;
   const displayFilename = format === 'pdf' && hasMultiple ? pdfAllFilename : `${baseName}-corrected.${format}`;
+
+  // Burn the shared filter settings into the pixels so every export format
+  // (PNG data URL, JPG re-encode, PDF embed, batch ZIP/PDF) matches the
+  // preview. Identity settings pass the original base64 through untouched.
+  const withFilters = (image: string) => applyFilterSettingsToPngBase64(image, filterSettings);
 
   const runExport = async () => {
     if (!resultImage) return;
     setExporting(true);
     try {
-      const work = format === 'pdf'
-        ? buildPdfFromPngImages(hasMultiple ? allJobs!.map((j) => j.resultImage) : [resultImage])
-            .then((bytes) => downloadBlob(bytes, displayFilename, 'application/pdf'))
-        : format === 'jpg'
-        ? convertPngBase64ToJpegBlob(resultImage).then((blob) => downloadBlob(blob, `${baseName}-corrected.jpg`, 'image/jpeg'))
-        : Promise.resolve().then(() => {
-            const a = document.createElement('a');
-            a.href = `data:image/png;base64,${resultImage}`;
-            a.download = `${baseName}-corrected.png`;
-            a.click();
-          });
+      const work = (async () => {
+        if (format === 'pdf') {
+          const sources = hasMultiple ? allJobs!.map((j) => j.resultImage) : [resultImage];
+          const filtered: string[] = [];
+          for (const src of sources) filtered.push(await withFilters(src));
+          const bytes = await buildPdfFromPngImages(filtered);
+          downloadBlob(bytes, displayFilename, 'application/pdf');
+        } else if (format === 'jpg') {
+          const blob = await convertPngBase64ToJpegBlob(await withFilters(resultImage));
+          downloadBlob(blob, `${baseName}-corrected.jpg`, 'image/jpeg');
+        } else {
+          const a = document.createElement('a');
+          a.href = `data:image/png;base64,${await withFilters(resultImage)}`;
+          a.download = `${baseName}-corrected.png`;
+          a.click();
+        }
+      })();
       await Promise.all([work, new Promise((r) => setTimeout(r, 600))]);
       setDone(true);
     } finally {
@@ -1487,17 +1579,20 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
     try {
       const today = new Date().toISOString().slice(0, 10);
       if (format === 'pdf') {
-        const bytes = await buildPdfFromPngImages(allJobs.map((j) => j.resultImage));
+        const filtered: string[] = [];
+        for (const job of allJobs) filtered.push(await withFilters(job.resultImage));
+        const bytes = await buildPdfFromPngImages(filtered);
         downloadBlob(bytes, `folio-corrected-${today}.pdf`, 'application/pdf');
       } else {
         const JSZip = (await import('jszip')).default;
         const zip = new JSZip();
         for (const job of allJobs) {
           const base = job.fileName.replace(/\.[^/.]+$/, '');
+          const filtered = await withFilters(job.resultImage);
           if (format === 'jpg') {
-            zip.file(`${base}-corrected.jpg`, await convertPngBase64ToJpegBlob(job.resultImage));
+            zip.file(`${base}-corrected.jpg`, await convertPngBase64ToJpegBlob(filtered));
           } else {
-            zip.file(`${base}-corrected.png`, job.resultImage, { base64: true });
+            zip.file(`${base}-corrected.png`, filtered, { base64: true });
           }
         }
         const blob = await zip.generateAsync({ type: 'blob' });
@@ -1554,8 +1649,8 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
               </div>
             )}
             <div className="preview-canvas" style={{ position: 'relative', flex: 1, minWidth: 0, aspectRatio: '4/3', background: 'color-mix(in oklab, var(--ink) 4%, var(--bg))', border: '1px solid var(--rule-strong)', overflow: 'hidden', padding: 32 }}>
-              {resultImage ? (
-                <img src={`data:image/png;base64,${resultImage}`} alt="Export preview" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+              {previewSrc ? (
+                <img src={`data:image/png;base64,${previewSrc}`} alt="Export preview" style={{ width: '100%', height: '100%', objectFit: 'contain', filter: exportFilterStr }} />
               ) : (
                 <div style={{ width: '62%', height: '100%', margin: '0 auto' }}>
                   <DocPaperMock kind="essay" title="Document" sub="READY TO EXPORT" />
@@ -1744,6 +1839,11 @@ export function DashboardPage() {
   const processingIdxRef = useRef(0);
   const [viewIdx, setViewIdx] = useState(0);
 
+  // Filter settings — lifted here so the Filters screen (live preview) and
+  // the Export screen (burned into every output format) share one source of
+  // truth. Applies to all pages of a batch.
+  const [filterSettings, setFilterSettings] = useState<FilterSettings>(DEFAULT_FILTER_SETTINGS);
+
   // Keep ref in sync for stale-closure-safe reads
   useEffect(() => { fileQueueRef.current = fileQueue; }, [fileQueue]);
 
@@ -1881,6 +1981,15 @@ export function DashboardPage() {
     setTimeout(advanceQueue, 1500);
   };
 
+  // Manual adjust (§06): replace the viewed job's result with the warped image
+  // so the filter preview and every export path pick it up. Goes through
+  // patchJob (issue #31's queue rework) so fileQueueRef stays in sync too.
+  const applyAdjustedResult = (newResultImage: string) => {
+    const job = fileQueue[viewIdx];
+    if (!job) return;
+    patchJob(job.id, { resultImage: newResultImage });
+  };
+
   const screenProps = { lang, go };
 
   const renderScreen = () => {
@@ -1917,13 +2026,15 @@ export function DashboardPage() {
         const vj = fileQueue[viewIdx] ?? null;
         return <ScreenAdjust {...screenProps}
           resultImage={vj?.resultImage ?? null}
-          viewIdx={viewIdx} totalJobs={fileQueue.length} onViewChange={setViewIdx} />;
+          viewIdx={viewIdx} totalJobs={fileQueue.length} onViewChange={setViewIdx}
+          onApply={applyAdjustedResult} />;
       }
       case 'filter': {
         const vj = fileQueue[viewIdx] ?? null;
         return <ScreenFilter {...screenProps}
           resultImage={vj?.resultImage ?? null}
-          viewIdx={viewIdx} totalJobs={fileQueue.length} onViewChange={setViewIdx} />;
+          viewIdx={viewIdx} totalJobs={fileQueue.length} onViewChange={setViewIdx}
+          settings={filterSettings} onSettingsChange={setFilterSettings} />;
       }
       case 'export': {
         const vj = fileQueue[viewIdx] ?? null;
@@ -1934,7 +2045,7 @@ export function DashboardPage() {
           resultImage={vj?.resultImage ?? null}
           fileName={vj?.file.name ?? null}
           viewIdx={viewIdx} totalJobs={fileQueue.length} onViewChange={setViewIdx}
-          allJobs={allJobs} />;
+          allJobs={allJobs} filterSettings={filterSettings} />;
       }
       case 'history': return <ScreenHistory {...screenProps} history={history} />;
       default:        return <ScreenHome {...screenProps} usage={usage} history={history} />;
