@@ -8,6 +8,7 @@ import type { JobStatus } from '../lib/processQueue';
 import { buildPdfFromPngImages, downloadBlob } from '../lib/exportPdf';
 import { convertPngBase64ToJpegBlob } from '../lib/exportJpg';
 import { progressEventSchema } from '@my-app/shared';
+import { base64ByteLength, formatBytes, formatDimensions, formatElapsedSeconds } from '../lib/displayMetrics';
 import type { UsageInfo, HistoryItem } from '@my-app/shared';
 
 // ─────────────────────────────────────────────
@@ -487,15 +488,13 @@ function ScreenCapture({ lang, go }: { lang: Lang; go: (id: ScreenId) => void })
             }} />
           )}
           <CornerBrackets color="#fff" />
+          {/* NOTE: no real camera is wired up yet (shutter just navigates to
+              Upload) — so this bar only shows state Folio actually has
+              (capture mode); it no longer claims resolution/ISO/aperture/
+              battery telemetry that would be fabricated (issue #47). */}
           <div style={{ position: 'absolute', top: 14, left: 14, right: 14, display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: '0.1em', color: 'rgba(255,255,255,.8)' }}>
             <span>● REC · {mode.toUpperCase()}</span>
-            <span>4096 × 3072 · ƒ/1.8</span>
             <span style={{ color: 'var(--accent)' }}>◆ LOCKED</span>
-          </div>
-          <div style={{ position: 'absolute', bottom: 14, left: 14, right: 14, display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: '0.1em', color: 'rgba(255,255,255,.7)' }}>
-            <span>EXPOSURE +0.3</span>
-            <span>ISO 80 · 1/60s</span>
-            <span>BATT 86%</span>
           </div>
           <div style={{ position: 'absolute', inset: 0, background: '#fff', opacity: flash ? 1 : 0, transition: 'opacity .12s', pointerEvents: 'none' }} />
         </div>
@@ -505,12 +504,6 @@ function ScreenCapture({ lang, go }: { lang: Lang; go: (id: ScreenId) => void })
           <div className="card">
             <div className="label" style={{ marginBottom: 8 }}>{jp ? '検出済み' : 'DETECTED'}</div>
             <div className="serif" style={{ fontSize: 26, lineHeight: 1.1 }}>{jp ? '4つの角を検出' : '4 corners locked'}</div>
-            <div className="rule" style={{ margin: '12px 0' }} />
-            <div className="row between">
-              <span className="label">{jp ? '信頼度' : 'CONFIDENCE'}</span>
-              <span className="mono" style={{ fontSize: 12 }}>97.2%</span>
-            </div>
-            <div className="bar" style={{ marginTop: 8 }}><i style={{ width: '97.2%' }} /></div>
           </div>
           <div className="card">
             <div className="row between">
@@ -689,6 +682,19 @@ function ScreenProcessing({ lang, go, job, jobIndex, totalJobs, queueSummary, on
   const [downloadPct, setDownloadPct] = useState(0);     // ④ 下り受信   (XHR onprogress)
   const startTime = useRef(Date.now());
 
+  // ELAPSED/LEFT below are computed from real timestamps, but this component
+  // otherwise only re-renders when an SSE/XHR progress event arrives — if
+  // those stall, the clock visually froze (issue #47). Tick once a second
+  // while still running so it keeps advancing; stop once done so ELAPSED
+  // doesn't keep counting past completion.
+  const done = pct >= 100;
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (done) return;
+    const id = setInterval(() => forceTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [done]);
+
   const phaseLogs = ['DECODE / PREPROCESS', 'WC MODEL INFERENCE', 'BM MODEL INFERENCE', 'UNWARP / ENCODE'];
 
   const stagePhase: Record<string, number> = {
@@ -808,9 +814,9 @@ function ScreenProcessing({ lang, go, job, jobIndex, totalJobs, queueSummary, on
   }, [inputImage]);
 
   const elapsed = (Date.now() - startTime.current) / 1000;
-  const sec = elapsed.toFixed(1);
+  const sec = formatElapsedSeconds(elapsed);
   const estimated = pct > 0 ? (elapsed / pct) * 100 : 0;
-  const left = Math.max(0, estimated - elapsed).toFixed(1);
+  const left = formatElapsedSeconds(Math.max(0, estimated - elapsed));
 
   // 各エリア（アップロード / 推論 / ダウンロード）に「送信済み」「到着」の2本をまとめる。
   const groups: {
@@ -885,10 +891,12 @@ function ScreenProcessing({ lang, go, job, jobIndex, totalJobs, queueSummary, on
             <span>{pct.toFixed(0)}%</span>
             <span>{pct >= 100 ? '✓ DONE' : 'PROCESSING…'}</span>
           </div>
-          <div style={{ position: 'absolute', bottom: 14, left: 14, right: 14, display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: '0.1em', color: 'rgba(255,255,255,.7)' }}>
-            <span>HOMOGRAPHY 3×3</span>
-            <span>RMS ERR 0.18 px</span>
-            <span>{jp ? '経過' : 'ELAPSED'} {sec}s · {jp ? '残り' : 'LEFT'} {left}s</span>
+          {/* HOMOGRAPHY/RMS-error readouts were fabricated (no real homography
+              solve is exposed by the backend) and have been removed per
+              issue #47; ELAPSED/LEFT are real (see startTime above) and now
+              tick via the interval above instead of freezing between events. */}
+          <div style={{ position: 'absolute', bottom: 14, left: 14, right: 14, display: 'flex', justifyContent: 'flex-end', fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: '0.1em', color: 'rgba(255,255,255,.7)' }}>
+            <span>{jp ? '経過' : 'ELAPSED'} {sec} · {jp ? '残り' : 'LEFT'} {left}</span>
           </div>
         </div>
 
@@ -1059,6 +1067,34 @@ function ScreenCompare({ lang, go, inputImage, resultImage, viewIdx, totalJobs, 
   const beforeSrc = inputImage ? `data:image/png;base64,${inputImage}` : null;
   const afterSrc  = resultImage ? `data:image/png;base64,${resultImage}` : null;
 
+  // Real, cheaply-available metrics for the sidebar (issue #41): pixel
+  // dimensions decoded from the actual images, and byte size from the
+  // actual base64 payloads. Skew/contrast/sharpness/coverage were removed
+  // outright — those would require real image analysis this app doesn't do.
+  const [beforeDims, setBeforeDims] = useState<{ width: number; height: number } | null>(null);
+  const [afterDims, setAfterDims] = useState<{ width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    if (!beforeSrc) { setBeforeDims(null); return; }
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => { if (!cancelled) setBeforeDims({ width: img.naturalWidth, height: img.naturalHeight }); };
+    img.src = beforeSrc;
+    return () => { cancelled = true; };
+  }, [beforeSrc]);
+
+  useEffect(() => {
+    if (!afterSrc) { setAfterDims(null); return; }
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => { if (!cancelled) setAfterDims({ width: img.naturalWidth, height: img.naturalHeight }); };
+    img.src = afterSrc;
+    return () => { cancelled = true; };
+  }, [afterSrc]);
+
+  const beforeBytes = inputImage ? base64ByteLength(inputImage) : null;
+  const afterBytes = resultImage ? base64ByteLength(resultImage) : null;
+
   const modeLabels = { split: jp ? 'スプリット' : 'Split', stack: jp ? '並列' : 'Side by side', overlay: jp ? '重ね' : 'Overlay' };
 
   return (
@@ -1151,26 +1187,38 @@ function ScreenCompare({ lang, go, inputImage, resultImage, viewIdx, totalJobs, 
 
         {/* Metrics + Actions */}
         <aside className="col" style={{ gap: 14 }}>
-          <div className="card">
-            <div className="label" style={{ marginBottom: 10 }}>{jp ? '解析メトリクス' : 'ANALYSIS METRICS'}</div>
-            {[
-              [jp ? '歪み角度' : 'Skew angle', '13.6°', '→ 0.0°', 100],
-              [jp ? 'コントラスト' : 'Contrast', '0.42', '→ 0.71', 71],
-              [jp ? '輪郭の鮮鋭度' : 'Sharpness', '0.55', '→ 0.89', 89],
-              [jp ? '用紙占有率' : 'Coverage', '38%', '→ 96%', 96],
-            ].map(([k, before, after, w], i) => (
-              <div key={i} style={{ padding: '8px 0', borderBottom: i < 3 ? '1px solid var(--rule)' : 'none' }}>
-                <div className="row between">
-                  <span className="label">{k}</span>
-                  <span className="mono" style={{ fontSize: 11 }}>
-                    <span style={{ color: 'var(--mute)' }}>{before}</span>{' '}
-                    <b style={{ color: 'var(--accent)' }}>{after}</b>
-                  </span>
+          {/* Skew/contrast/sharpness/coverage were hardcoded and unrelated to
+              the actual images (issue #41) — removed rather than re-faked.
+              What's shown now (dimensions, file size) is read from the real
+              before/after images; the card itself is omitted until both are
+              available so there's nothing left to fake in the meantime. */}
+          {hasImages && (
+            <div className="card">
+              <div className="label" style={{ marginBottom: 10 }}>{jp ? '画像情報' : 'IMAGE INFO'}</div>
+              {[
+                {
+                  label: jp ? '解像度' : 'Dimensions',
+                  before: beforeDims ? formatDimensions(beforeDims.width, beforeDims.height) : '…',
+                  after: afterDims ? formatDimensions(afterDims.width, afterDims.height) : '…',
+                },
+                {
+                  label: jp ? 'ファイルサイズ' : 'File size',
+                  before: beforeBytes != null ? formatBytes(beforeBytes) : '…',
+                  after: afterBytes != null ? formatBytes(afterBytes) : '…',
+                },
+              ].map((row, i, arr) => (
+                <div key={row.label} style={{ padding: '8px 0', borderBottom: i < arr.length - 1 ? '1px solid var(--rule)' : 'none' }}>
+                  <div className="row between">
+                    <span className="label">{row.label}</span>
+                    <span className="mono" style={{ fontSize: 11 }}>
+                      <span style={{ color: 'var(--mute)' }}>{row.before}</span>{' '}
+                      <b style={{ color: 'var(--accent)' }}>→ {row.after}</b>
+                    </span>
+                  </div>
                 </div>
-                <div className="bar" style={{ marginTop: 6 }}><i style={{ width: `${w}%` }} /></div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
           {hasImages ? (
             <button className="btn accent" onClick={() => go('filter')}>
               {jp ? 'この結果で進む' : 'Accept & continue'} <span className="arrow">→</span>
