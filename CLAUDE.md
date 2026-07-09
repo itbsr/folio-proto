@@ -171,3 +171,18 @@ Triage order: reproduce → localize (which layer: UI/API/DB/build) → reduce t
 - Report results and impact, not process narration.
 - Ask at most one focused question when blocked; include a recommended default and explain what the answer changes.
 - Always state what was run (test/lint/build) and what the outcome was.
+
+### Shell commands
+
+Write shell commands to be easy to review before approval.
+
+- Don't cram multiple statements onto one line with `;`. Split them across real line breaks so each statement is readable in the approval dialog.
+- For separator/section headers, use `echo` (which appends a newline automatically), not `printf` (which requires explicit `\n` and adds noise). Use a bare `echo` for a blank line.
+
+```bash
+echo "===== node ====="
+node --version
+echo
+echo "===== npm ====="
+npm --version
+```
