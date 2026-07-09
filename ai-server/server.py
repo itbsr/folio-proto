@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hmac
 import json
 import os
 import threading
@@ -79,7 +80,11 @@ app = FastAPI(title="DewarpNet API", lifespan=lifespan)
 def verify_api_key(
     credentials: HTTPAuthorizationCredentials = Security(security),
 ) -> None:
-    if not credentials or credentials.credentials != API_KEY:
+    # Constant-time comparison to avoid a timing side-channel on the API key.
+    # Encode to bytes so a non-ASCII bearer token can't make compare_digest raise.
+    if not credentials or not hmac.compare_digest(
+        credentials.credentials.encode("utf-8"), API_KEY.encode("utf-8")
+    ):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
