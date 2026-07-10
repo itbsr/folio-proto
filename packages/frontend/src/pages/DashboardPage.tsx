@@ -1532,16 +1532,37 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
       <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 32, marginTop: 24 }}>
         {/* Preview */}
         <div>
-          <div className="label" style={{ marginBottom: 12 }}>{jp ? 'プレビュー' : 'PREVIEW'}</div>
-          <div className="preview-canvas" style={{ position: 'relative', aspectRatio: '4/3', background: 'color-mix(in oklab, var(--ink) 4%, var(--bg))', border: '1px solid var(--rule-strong)', overflow: 'hidden', padding: 32 }}>
-            {resultImage ? (
-              <img src={`data:image/png;base64,${resultImage}`} alt="Export preview" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-            ) : (
-              <div style={{ width: '62%', height: '100%', margin: '0 auto' }}>
-                <DocPaperMock kind="essay" title="Document" sub="READY TO EXPORT" />
+          <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+            {hasMultiple && <div className="label" style={{ width: 104, flex: 'none' }}>{jp ? 'ページ一覧' : 'PAGES'}</div>}
+            <div className="label">{jp ? 'プレビュー' : 'PREVIEW'}</div>
+          </div>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'stretch' }}>
+            {hasMultiple && (
+              <div style={{ width: 104, flex: 'none', display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto', minHeight: 0, contain: 'size' }}>
+                {allJobs!.map((job, i) => (
+                  <button key={i} onClick={() => onViewChange(i)} style={{ appearance: 'none', flex: 'none', padding: 6, border: `1px solid ${i === viewIdx ? 'var(--accent)' : 'var(--rule-strong)'}`, background: i === viewIdx ? 'color-mix(in oklab, var(--accent) 10%, var(--bg))' : 'var(--bg)', cursor: 'pointer', color: 'var(--ink)', textAlign: 'left' }}>
+                    <img
+                      src={`data:image/png;base64,${job.resultImage}`}
+                      alt={job.fileName}
+                      style={{ width: '100%', aspectRatio: '3/4', objectFit: 'cover', display: 'block', background: 'var(--paper)', marginBottom: 6 }}
+                    />
+                    <div className="mono" style={{ fontSize: 9, letterSpacing: '0.05em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <span style={{ color: i === viewIdx ? 'var(--accent)' : 'var(--mute)' }}>{String(i + 1).padStart(2, '0')}</span> — {job.fileName}
+                    </div>
+                  </button>
+                ))}
               </div>
             )}
-            <CornerBrackets color="var(--ink)" inset={12} size={22} weight={1.5} />
+            <div className="preview-canvas" style={{ position: 'relative', flex: 1, minWidth: 0, aspectRatio: '4/3', background: 'color-mix(in oklab, var(--ink) 4%, var(--bg))', border: '1px solid var(--rule-strong)', overflow: 'hidden', padding: 32 }}>
+              {resultImage ? (
+                <img src={`data:image/png;base64,${resultImage}`} alt="Export preview" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+              ) : (
+                <div style={{ width: '62%', height: '100%', margin: '0 auto' }}>
+                  <DocPaperMock kind="essay" title="Document" sub="READY TO EXPORT" />
+                </div>
+              )}
+              <CornerBrackets color="var(--ink)" inset={12} size={22} weight={1.5} />
+            </div>
           </div>
           {done && (
             <div style={{ marginTop: 16, padding: '14px 18px', background: 'var(--ink)', color: 'var(--bg)', display: 'flex', alignItems: 'center', gap: 12 }}>
