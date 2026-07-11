@@ -104,8 +104,11 @@ describe('quota', () => {
     const body = await res.json<{ error: string }>();
     expect(body.error).toBe('Processing failed');
 
-    // Quota is NOT consumed on failure…
-    expect(await getQuotaRow(user.id)).toBeNull();
+    // Quota is NOT consumed on failure: the slot is reserved atomically
+    // before the AI call and refunded when inference fails, so the month's
+    // row exists but its net count is 0.
+    const row = await getQuotaRow(user.id);
+    expect(row?.count).toBe(0);
 
     // …but the failure is logged in usage_logs (current behavior).
     const log = await env.DB.prepare(
