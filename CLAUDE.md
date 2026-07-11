@@ -92,7 +92,7 @@ The backend forwards images as base64 JSON to the Python AI server, enforces per
 
 ### Auth
 
-Session-based: login sets an HTTP-only cookie (`SameSite=None; Secure` for cross-origin HTTPS, `SameSite=Lax` for local HTTP). Sessions expire after 7 days. Each protected endpoint calls `getSessionUser()`. Passwords are hashed with PBKDF2-SHA256 (100k iterations) via the Web Crypto API — not bcrypt.
+Session-based: login sets an HTTP-only cookie (`SameSite=None; Secure; Partitioned` for cross-origin HTTPS — Partitioned/CHIPS is required so iOS WebKit's ITP accepts the third-party cookie; `SameSite=Lax` for local HTTP). Sessions expire after 7 days. Each protected endpoint calls `getSessionUser()`. Passwords are hashed with PBKDF2-SHA256 (100k iterations) via the Web Crypto API — not bcrypt.
 
 The Hono RPC client (`src/lib/hc.ts`) must be initialized with `credentials: 'include'` so the browser sends the session cookie on cross-origin requests in production.
 

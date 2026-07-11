@@ -167,6 +167,7 @@ make clean     # イメージ削除
 ## 制約・注意点
 
 - **AI サーバーは水平スケール不可。** ジョブ状態（キュー・バッファ・進捗）をプロセスメモリに `jobId` で保持しており、未取得ジョブは5分で失効します。スケールさせるには Redis や Durable Objects などの外部状態が必要です。
+- **iOS 18.3 以前の Safari/WebKit ではログインが維持できません。** フロント（pages.dev）とバックエンド（workers.dev）がクロスサイトのため、セッション Cookie は `Partitioned`（CHIPS）属性で許可していますが、CHIPS は iOS 18.4 以降でのみ対応です。完全な解決にはフロントと API の同一オリジン化が必要です（将来対応）。
 - 画像の永続保存は未実装（保存方針は検討中）。
 - 新機能の開発は必ず `shared のスキーマ定義 → D1 マイグレーション → バックエンド → フロントエンド` の順で行います。詳細な開発規約は [CLAUDE.md](./CLAUDE.md) を参照してください。
 
@@ -202,7 +203,7 @@ npx wrangler deploy --minify src/index.ts -e staging   # staging
 VITE_API_URL=https://<バックエンドの公開URL> npm run build --workspace=@my-app/frontend
 ```
 
-`packages/frontend/dist/` を Cloudflare Pages や Vercel にアップロードします。フロントとバックエンドがクロスオリジンになるため、セッション Cookie は HTTPS 必須（`SameSite=None; Secure`）です。
+`packages/frontend/dist/` を Cloudflare Pages や Vercel にアップロードします。フロントとバックエンドがクロスオリジンになるため、セッション Cookie は HTTPS 必須（`SameSite=None; Secure; Partitioned`）です。`Partitioned`（CHIPS）は、pages.dev と workers.dev がクロスサイトになることで iOS WebKit（ITP）にサードパーティ Cookie として遮断される問題への対応です（CHIPS 非対応ブラウザは属性を無視するため無害）。
 
 ### AI サーバー（Docker）
 

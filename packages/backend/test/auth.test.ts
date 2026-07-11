@@ -75,3 +75,56 @@ describe('auth', () => {
     expect(res.status).toBe(400);
   });
 });
+
+// Cross-site session cookie attributes (issue #97): the frontend (pages.dev)
+// and backend (workers.dev) are cross-SITE, so the cookie is third-party and
+// must be SameSite=None; Secure; Partitioned (CHIPS) for iOS WebKit to keep it.
+describe('session cookie attributes', () => {
+  it('login over https sets SameSite=None; Secure; Partitioned', async () => {
+    await postJson('/auth/register', {
+      email: 'erin@example.com',
+      password: 'password123',
+    });
+    const res = await postJson(
+      '/auth/login',
+      { email: 'erin@example.com', password: 'password123' },
+      undefined,
+      'https://example.com',
+    );
+    expect(res.status).toBe(200);
+    const setCookie = res.headers.get('set-cookie') ?? '';
+    expect(setCookie).toMatch(/^session=[0-9a-f-]+;/);
+    expect(setCookie).toMatch(/SameSite=None/i);
+    expect(setCookie).toMatch(/Secure/i);
+    expect(setCookie).toMatch(/Partitioned/i);
+  });
+
+  it('login over http sets SameSite=Lax without Secure or Partitioned', async () => {
+    await postJson('/auth/register', {
+      email: 'frank@example.com',
+      password: 'password123',
+    });
+    const res = await postJson('/auth/login', {
+      email: 'frank@example.com',
+      password: 'password123',
+    });
+    expect(res.status).toBe(200);
+    const setCookie = res.headers.get('set-cookie') ?? '';
+    expect(setCookie).toMatch(/^session=[0-9a-f-]+;/);
+    expect(setCookie).toMatch(/SameSite=Lax/i);
+    expect(setCookie).not.toMatch(/Secure/i);
+    expect(setCookie).not.toMatch(/Partitioned/i);
+  });
+
+  it('logout over https deletes the cookie with matching Partitioned attributes', async () => {
+    const { cookie } = await registerAndLogin('grace@example.com');
+    const res = await postJson('/auth/logout', {}, cookie, 'https://example.com');
+    expect(res.status).toBe(200);
+    const setCookie = res.headers.get('set-cookie') ?? '';
+    expect(setCookie).toMatch(/^session=;/);
+    expect(setCookie).toMatch(/Max-Age=0/i);
+    expect(setCookie).toMatch(/SameSite=None/i);
+    expect(setCookie).toMatch(/Secure/i);
+    expect(setCookie).toMatch(/Partitioned/i);
+  });
+});

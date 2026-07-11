@@ -9,3 +9,8 @@
 - **失敗モード**: マルチファイルキューの前進（`advanceQueue()`）が、処理中ジョブの成功/失敗コールバック（`onResult`/`onError`）からのみ呼ばれていた。ところが次ジョブへ前進する際に状態を無条件で `'processing'` に上書きしていたため、変換失敗済み（`status:'error'`, `inputImage:null`）のジョブに番が回ると、処理開始側の effect が `if (!inputImage) return;` で何もせず終了し、どのコールバックも発火しない。「前進させる者」が誰もいなくなり、キューが永久に停止した。
 - **検知シグナル**: 複数ファイル投入時、壊れたファイル以降が進まず、キューUIに `PROCESSING` のまま残るジョブがある。DevTools の Network タブに該当ジョブの XHR/SSE が一切現れない。
 - **予防ルール**: キューの状態遷移は「イベントハンドラの副作用の寄せ集め」ではなく、純粋関数（`lib/processQueue.ts` の `decideAdvance()`）に集約してユニットテストで固定する。前進時に既存の終端状態（`error`/`done`）を上書きしない。「開始できない（開始条件を満たさない）ジョブ」も終端イベントとして扱い、その発生箇所（変換の `catch` など）からもキューを前進させる。非同期コールバックから読む添字・配列は state ではなく ref を経由し、stale closure を避ける。
+
+## クロスサイト分離（pages.dev / workers.dev）のセッションCookieは iOS WebKit に黙って捨てられる（issue #97）
+- **失敗モード**: フロントエンド（pages.dev）とバックエンド（workers.dev）が別の登録可能ドメイン（両方とも Public Suffix List 登録）に分かれていたため、セッション Cookie がサードパーティ Cookie 扱いになり、iOS WebKit の ITP が非パーティション化サードパーティ Cookie を全面的に遮断した。ログインは 200 を返し成功に見えるが Set-Cookie は保存されず、以降の認証付きリクエスト（`/api/images/upload`・`/api/images/progress` など）がすべて 401 になった。
+- **検知シグナル**: デスクトップ Chrome では動くのに、iPhone では全ブラウザ（Safari/Chrome/Edge — すべて WebKit）で 401 になる。レスポンスに Set-Cookie は存在するのに、以降のリクエストで Cookie が一切送り返されない。
+- **予防ルール**: フロントエンドと API が異なる登録可能ドメインに分かれる構成では、Cookie 認証は「WebKit ではデフォルトで壊れている」前提で扱う。`Partitioned`（CHIPS）属性を付与するか同一オリジンに寄せることを必須とし、出荷前に WebKit（実機 iPhone または Safari）で認証フローを必ずテストする。CHIPS でも iOS 18.3 以前は未対応な点に注意（完全解決は同一オリジン化のみ）。
