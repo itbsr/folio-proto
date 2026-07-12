@@ -9,6 +9,7 @@ import { buildPdfFromPngImages, downloadBlob } from '../lib/exportPdf';
 import { convertPngBase64ToJpegBlob } from '../lib/exportJpg';
 import { progressEventSchema } from '@my-app/shared';
 import type { UsageInfo, HistoryItem } from '@my-app/shared';
+import { parseUsageHeader, parseUsageInfo } from '../lib/usageHeader';
 
 // ─────────────────────────────────────────────
 // THEME SYSTEM
@@ -772,15 +773,10 @@ function ScreenProcessing({ lang, go, job, jobIndex, totalJobs, queueSummary, on
       if (xhr.status >= 200 && xhr.status < 300) {
         setDownloadPct(100);
         setPct(100);
-        // X-Usage is best-effort: absent/unparsable header → undefined, and the
-        // parent falls back to refetching /api/images/usage (issue #34).
-        let usage: UsageInfo | undefined;
-        try {
-          const parsed: unknown = JSON.parse(xhr.getResponseHeader('X-Usage') ?? 'null');
-          if (parsed !== null && typeof parsed === 'object' && 'used' in parsed && 'limit' in parsed) {
-            usage = parsed as UsageInfo;
-          }
-        } catch { /* best-effort */ }
+        // X-Usage is best-effort: absent/unparsable/malformed header → undefined
+        // (validated against the full UsageInfo schema), and the parent falls
+        // back to refetching /api/images/usage (issue #34).
+        const usage = parseUsageHeader(xhr.getResponseHeader('X-Usage'));
         finish();
         es.close();
         onResult(job.id, xhr.responseText, usage);
@@ -1861,10 +1857,12 @@ export function DashboardPage() {
       setUsage(newUsage);
     } else {
       // X-Usage header missing/unparsable (issue #34): keep the last-known
-      // usage on screen and refetch it in the background.
+      // usage on screen and refetch it in the background. The refetch body
+      // is validated against the full UsageInfo schema too (review follow-up)
+      // so a malformed response can't clobber the last-known usage either.
       client.api.images.usage.$get().then((r) => r.json() as Promise<unknown>).then((data) => {
-        const d = data as Record<string, unknown>;
-        if ('month' in d) setUsage(d as unknown as UsageInfo);
+        const parsed = parseUsageInfo(data);
+        if (parsed) setUsage(parsed);
       }).catch(() => {});
     }
     refreshHistory();
