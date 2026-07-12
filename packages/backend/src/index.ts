@@ -16,11 +16,19 @@ app.use('*', cors({ origin: (o) => o ?? '*', credentials: true, allowHeaders: ['
 async function getSessionUser(c: Context<{ Bindings: Bindings }>) {
   const sessionId = getCookie(c, 'session');
   if (!sessionId) return null;
-  return c.env.DB.prepare(
+  const user = await c.env.DB.prepare(
     `SELECT u.id, u.email, u.plan
      FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.id = ? AND s.expires_at > datetime('now')`
   ).bind(sessionId).first<{ id: string; email: string; plan: 'free' | 'pro' }>();
+  if (user) return user;
+  // The cookie did not match a live session. If it points at an expired row,
+  // delete it now (PK lookup) so dead sessions presented by returning clients
+  // don't linger; unknown session ids make this a no-op.
+  await c.env.DB.prepare(
+    `DELETE FROM sessions WHERE id = ? AND expires_at <= datetime('now')`
+  ).bind(sessionId).run();
+  return null;
 }
 
 // ── Quota helpers ─────────────────────────────────────────────────────────
@@ -86,6 +94,11 @@ const routes = app
     ).bind(email).first<{ id: string; email: string; plan: string; password_hash: string }>();
     if (!user || !(await verifyPassword(password, user.password_hash)))
       return c.json({ error: 'Invalid email or password' }, 401);
+    // Opportunistic cleanup (no cron on Workers here): purge every expired
+    // session on each successful login. expires_at is stored as UTC
+    // 'YYYY-MM-DD HH:MM:SS' — the exact format datetime('now') yields — so
+    // the string comparison is sound; indexed by idx_sessions_expires_at.
+    await c.env.DB.prepare(`DELETE FROM sessions WHERE expires_at <= datetime('now')`).run();
     const sessionId = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
       .toISOString().replace('T', ' ').slice(0, 19);
