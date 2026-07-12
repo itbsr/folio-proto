@@ -19,6 +19,11 @@ npm run typecheck      # TypeScript type check (no emit)
 # Tests (Vitest workspace: shared runs in node, backend in workerd with Miniflare D1, frontend in jsdom)
 npm test               # Run all workspace tests
 
+# ai-server tests (pytest; torch stays Docker-only — API tests stub the pipeline)
+python3 -m venv .venv
+.venv/bin/pip install -r ai-server/requirements.txt -r ai-server/requirements-dev.txt
+cd ai-server && ../.venv/bin/python -m pytest
+
 # Backend only
 npm run deploy --workspace=@my-app/backend   # Deploy to Cloudflare Workers
 
