@@ -72,6 +72,7 @@ type FileJob = {
   id: string;
   file: File;
   inputImage: string | null;
+  inputMime: string | null; // MIME of the inputImage bytes (HEIC is converted to image/jpeg)
   resultImage: string | null;
   errorMsg: string | null;
   status: JobStatus;
@@ -679,6 +680,7 @@ function ScreenProcessing({ lang, go, job, jobIndex, totalJobs, queueSummary, on
   onError: (jobId: string, msg: string) => void;
 }) {
   const inputImage = job.inputImage;
+  const inputMime = job.inputMime ?? 'application/octet-stream';
   const jp = lang === 'jp';
   const [pct, setPct] = useState(0);
   const [phase, setPhase] = useState(0);
@@ -870,7 +872,7 @@ function ScreenProcessing({ lang, go, job, jobIndex, totalJobs, queueSummary, on
         <div className="preview-canvas" style={{ position: 'relative', aspectRatio: '4/3', background: '#0c0c0a', overflow: 'hidden' }}>
           {inputImage ? (
             <img
-              src={`data:image/png;base64,${inputImage}`}
+              src={`data:${inputMime};base64,${inputImage}`}
               alt="Processing"
               style={{ width: '100%', height: '100%', objectFit: 'contain', opacity: 0.6, filter: pct >= 100 ? 'none' : `blur(${0.5 * (1 - pct / 100)}px) brightness(0.7)`, transition: 'all .4s' }}
             />
@@ -1025,9 +1027,9 @@ function ScreenProcessing({ lang, go, job, jobIndex, totalJobs, queueSummary, on
 // ─────────────────────────────────────────────
 // SCREEN 05 · COMPARE (Before/After)
 // ─────────────────────────────────────────────
-function ScreenCompare({ lang, go, inputImage, resultImage, viewIdx, totalJobs, onViewChange }: {
+function ScreenCompare({ lang, go, inputImage, inputMime, resultImage, viewIdx, totalJobs, onViewChange }: {
   lang: Lang; go: (id: ScreenId) => void;
-  inputImage: string | null; resultImage: string | null;
+  inputImage: string | null; inputMime: string | null; resultImage: string | null;
   viewIdx: number; totalJobs: number; onViewChange: (idx: number) => void;
 }) {
   const jp = lang === 'jp';
@@ -1059,7 +1061,7 @@ function ScreenCompare({ lang, go, inputImage, resultImage, viewIdx, totalJobs, 
   };
 
   const hasImages = inputImage && resultImage;
-  const beforeSrc = inputImage ? `data:image/png;base64,${inputImage}` : null;
+  const beforeSrc = inputImage ? `data:${inputMime ?? 'application/octet-stream'};base64,${inputImage}` : null;
   const afterSrc  = resultImage ? `data:image/png;base64,${resultImage}` : null;
 
   const modeLabels = { split: jp ? 'スプリット' : 'Split', stack: jp ? '並列' : 'Side by side', overlay: jp ? '重ね' : 'Overlay' };
@@ -1835,6 +1837,7 @@ export function DashboardPage() {
       id: crypto.randomUUID(),
       file: f,
       inputImage: null,
+      inputMime: null,
       resultImage: null,
       errorMsg: null,
       status: 'pending' as JobStatus,
@@ -1849,11 +1852,11 @@ export function DashboardPage() {
     // Convert files to base64 concurrently; navigate to processing after the first is ready
     jobs.forEach((job, i) => {
       fileToBase64(job.file)
-        .then((b64) => {
+        .then(({ base64, mimeType }) => {
           setFileQueue((prev) =>
             prev.map((j) =>
               j.id === job.id
-                ? { ...j, inputImage: b64, status: i === 0 ? 'processing' : j.status }
+                ? { ...j, inputImage: base64, inputMime: mimeType, status: i === 0 ? 'processing' : j.status }
                 : j,
             ),
           );
@@ -1924,7 +1927,7 @@ export function DashboardPage() {
       case 'compare': {
         const vj = fileQueue[viewIdx] ?? null;
         return <ScreenCompare {...screenProps}
-          inputImage={vj?.inputImage ?? null} resultImage={vj?.resultImage ?? null}
+          inputImage={vj?.inputImage ?? null} inputMime={vj?.inputMime ?? null} resultImage={vj?.resultImage ?? null}
           viewIdx={viewIdx} totalJobs={fileQueue.length} onViewChange={setViewIdx} />;
       }
       case 'adjust': {
