@@ -147,6 +147,13 @@ A task is complete only when:
 2. Relevant tests/lint/typecheck/build pass (or skipped with documented reason).
 3. A short verification story exists: what changed and how it was confirmed.
 4. README.md is updated if the change affects it (see Documentation).
+5. If the change addresses a GitHub issue: the issue is linked from the PR per the Pull requests rules, and confirmed closed after merge.
+
+### Pull requests
+
+- A PR that addresses a GitHub issue must state `Closes #<number>` on its own line in the **PR body**. GitHub only recognizes the exact keywords close/closes/closed/fix/fixes/fixed/resolve/resolves/resolved — phrases like "closing #24" or "(issue #24)" do not link the issue and auto-close silently fails. Commit messages may mention the issue number for context, but never rely on them to close the issue.
+- After opening the PR and **before merging**, verify the link exists: the issue appears in the PR's "Development" sidebar, or `gh pr view <PR> --json closingIssuesReferences` returns a non-empty list. If it is empty, fix the PR body first.
+- After merging, confirm the issue was actually closed (`gh issue view <number> --json state`).
 
 ### Documentation
 
