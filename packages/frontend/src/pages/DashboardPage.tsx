@@ -1447,6 +1447,13 @@ function ScreenFilter({ lang, go, resultImage, viewIdx, totalJobs, onViewChange 
 // ─────────────────────────────────────────────
 // SCREEN 08 · EXPORT
 // ─────────────────────────────────────────────
+
+/** Local calendar date as YYYY-MM-DD — filenames should show the user's "today", not UTC. */
+function localDateStamp(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onViewChange, allJobs }: { lang: Lang; go: (id: ScreenId) => void; resultImage: string | null; fileName?: string | null; viewIdx: number; totalJobs: number; onViewChange: (idx: number) => void; allJobs?: Array<{ resultImage: string; fileName: string }>; }) {
   const jp = lang === 'jp';
   const [format, setFormat] = useState<'png' | 'pdf' | 'jpg'>('pdf');
@@ -1457,9 +1464,9 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
 
   const baseName = fileName
     ? fileName.replace(/\.[^/.]+$/, '')
-    : `folio-${new Date().toISOString().slice(0, 10)}`;
+    : `folio-${localDateStamp()}`;
   const hasMultiple = (allJobs?.length ?? 0) > 1;
-  const pdfAllFilename = `folio-corrected-${new Date().toISOString().slice(0, 10)}.pdf`;
+  const pdfAllFilename = `folio-corrected-${localDateStamp()}.pdf`;
   const displayFilename = format === 'pdf' && hasMultiple ? pdfAllFilename : `${baseName}-corrected.${format}`;
 
   const runExport = async () => {
@@ -1488,7 +1495,7 @@ function ScreenExport({ lang, go, resultImage, fileName, viewIdx, totalJobs, onV
     if (!allJobs || allJobs.length < 2) return;
     setDownloadingAll(true);
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = localDateStamp();
       if (format === 'pdf') {
         const bytes = await buildPdfFromPngImages(allJobs.map((j) => j.resultImage));
         downloadBlob(bytes, `folio-corrected-${today}.pdf`, 'application/pdf');
