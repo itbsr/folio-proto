@@ -76,7 +76,7 @@ ai-server/weights/dnetccnl_doc3d_final.pkl  # BM モデル
 環境変数を設定して Docker で起動します。
 
 ```bash
-cp ai-server/.env.example ai-server/.env   # API_KEY を設定（空にすると認証無効＝開発用）
+cp ai-server/.env.example ai-server/.env   # API_KEY を設定（必須。空だと起動時にエラーで停止）
 make build   # Docker イメージをビルド（base / weights / app の3層。差分のみ再ビルド）
 make run     # localhost:8000 で起動
 make logs    # ログ確認
