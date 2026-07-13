@@ -93,13 +93,22 @@ const routes = app
       .bind(sessionId, user.id, expiresAt).run();
     // Cross-site cookie (frontend and API on separate origins): the session
     // cookie must be SameSite=None; Secure to be sent on cross-site requests.
+    // It must also be Partitioned (CHIPS): pages.dev and workers.dev are both
+    // on the Public Suffix List, so the cookie is third-party and iOS WebKit's
+    // ITP silently drops unpartitioned third-party cookies (issue #97 — login
+    // returned 200 but every later request was 401 on iPhone). Partitioning is
+    // harmless here since the app is always used from the same top-level site,
+    // and CHIPS-unaware browsers simply ignore the attribute. Note: iOS ≤18.3
+    // lacks CHIPS support and still fails; full fix is same-origin hosting.
     // In local dev (http, same-origin via Vite proxy) fall back to Lax, since
-    // SameSite=None requires Secure and browsers drop Secure cookies over http.
+    // SameSite=None and Partitioned both require Secure, and browsers drop
+    // Secure cookies over http.
     const isHttps = c.req.url.startsWith('https://');
     setCookie(c, 'session', sessionId, {
       httpOnly: true, sameSite: isHttps ? 'None' : 'Lax', path: '/',
       maxAge: 60 * 60 * 24 * 7,
       secure: isHttps,
+      partitioned: isHttps,
     });
     return c.json({ user: { id: user.id, email: user.email, plan: user.plan } });
   })
@@ -107,7 +116,15 @@ const routes = app
   .post('/auth/logout', async (c) => {
     const sessionId = getCookie(c, 'session');
     if (sessionId) await c.env.DB.prepare('DELETE FROM sessions WHERE id = ?').bind(sessionId).run();
-    deleteCookie(c, 'session', { path: '/' });
+    // A partitioned cookie lives in a partitioned jar, so the deletion
+    // Set-Cookie must carry the same Secure/SameSite=None/Partitioned
+    // attributes as login's, or the browser won't match (and delete) it.
+    const isHttps = c.req.url.startsWith('https://');
+    deleteCookie(c, 'session', {
+      httpOnly: true, sameSite: isHttps ? 'None' : 'Lax', path: '/',
+      secure: isHttps,
+      partitioned: isHttps,
+    });
     return c.json({ success: true });
   })
 

@@ -5,14 +5,19 @@ import {
 } from 'cloudflare:test';
 import app from '../src/index';
 
-/** Dispatch a request to the Hono app with the test env and a fresh ExecutionContext. */
+/**
+ * Dispatch a request to the Hono app with the test env and a fresh
+ * ExecutionContext. `origin` controls the request URL scheme — cookie
+ * attributes (Secure/SameSite/Partitioned) depend on http vs https.
+ */
 export async function request(
   path: string,
   init?: RequestInit,
+  origin = 'http://example.com',
 ): Promise<Response> {
   const ctx = createExecutionContext();
   const res = await app.fetch(
-    new Request(`http://example.com/api${path}`, init),
+    new Request(`${origin}/api${path}`, init),
     env,
     ctx,
   );
@@ -25,15 +30,20 @@ export function postJson(
   path: string,
   body: unknown,
   cookie?: string,
+  origin?: string,
 ): Promise<Response> {
-  return request(path, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(cookie ? { Cookie: cookie } : {}),
+  return request(
+    path,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(cookie ? { Cookie: cookie } : {}),
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-  });
+    origin,
+  );
 }
 
 export interface TestUser {
