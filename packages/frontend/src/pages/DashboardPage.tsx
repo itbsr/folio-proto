@@ -10,6 +10,8 @@ import { convertPngBase64ToJpegBlob } from '../lib/exportJpg';
 import { progressEventSchema } from '@my-app/shared';
 import type { UsageInfo, HistoryItem } from '@my-app/shared';
 import { parseUsageHeader, parseUsageInfo } from '../lib/usageHeader';
+import { getInitialLang } from '../lib/lang';
+import type { Lang } from '../lib/lang';
 
 // ─────────────────────────────────────────────
 // THEME SYSTEM
@@ -62,7 +64,6 @@ function applyTheme(id: ThemeId) {
 // NAVIGATION
 // ─────────────────────────────────────────────
 type ScreenId = 'home' | 'capture' | 'upload' | 'processing' | 'compare' | 'adjust' | 'filter' | 'export' | 'history';
-type Lang = 'jp' | 'en';
 
 // ─────────────────────────────────────────────
 // FILE QUEUE (issue #3 — multi-file support)
@@ -1733,7 +1734,7 @@ export function DashboardPage() {
 
   // App state
   const [active, setActive] = useState<ScreenId>('home');
-  const [lang, setLang] = useState<Lang>('jp');
+  const [lang, setLang] = useState<Lang>(() => getInitialLang(navigator.language));
   const [theme, setTheme] = useState<ThemeId>('issue');
 
   // Data state
