@@ -1075,7 +1075,7 @@ function ScreenCompare({ lang, go, inputImage, resultImage, viewIdx, totalJobs, 
         </div>
         <div className="row" style={{ gap: 8 }}>
           <JobSwitcher viewIdx={viewIdx} totalJobs={totalJobs} onViewChange={onViewChange} lang={lang} />
-          {(['split', 'stack', 'overlay'] as const).map((m) => (
+          {(['stack', 'split', 'overlay'] as const).map((m) => (
             <button key={m} className={'tag' + (mode === m ? ' solid' : '')} style={{ cursor: 'pointer' }} onClick={() => setMode(m)}>
               {modeLabels[m]}
             </button>
