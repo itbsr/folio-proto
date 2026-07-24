@@ -1032,7 +1032,7 @@ function ScreenCompare({ lang, go, inputImage, resultImage, viewIdx, totalJobs, 
 }) {
   const jp = lang === 'jp';
   const [pos, setPos] = useState(48);
-  const [mode, setMode] = useState<'split' | 'stack' | 'overlay'>('split');
+  const [mode, setMode] = useState<'split' | 'stack' | 'overlay'>('stack');
   const wrapRef = useRef<HTMLDivElement>(null);
 
   const onDrag = useCallback((e: MouseEvent | TouchEvent) => {
