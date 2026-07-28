@@ -30,6 +30,9 @@ export default defineWorkersProject(async () => {
               // Outbound fetch to AI_ENDPOINT is mocked with fetchMock.
               AI_ENDPOINT: 'https://ai.test',
               AI_API_KEY: 'test-ai-key',
+              // CORS allowlist under test: one exact origin + one wildcard
+              // suffix entry (see test/cors.test.ts).
+              CORS_ORIGINS: 'https://app.test,https://*.example.pages.dev',
               TEST_MIGRATIONS: migrations,
             },
           },
